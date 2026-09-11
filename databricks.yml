@@ -1,0 +1,31 @@
+bundle:
+  name: databricks-digest
+
+include:
+  - resources/*.yml
+
+variables:
+  workspace_host:
+    description: Databricks workspace URL
+    default: https://dbc-b8858560-a152.cloud.databricks.com
+  catalog:
+    description: Unity Catalog catalog for the digest state table
+    default: workspace
+  schema:
+    description: Unity Catalog schema for the digest state table
+    default: default
+  secret_scope:
+    description: Databricks secret scope containing Gmail and Reddit settings
+    default: databricks-digest
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-b8858560-a152.cloud.databricks.com
+
+  prod:
+    mode: production
+    workspace:
+      host: ${var.workspace_host}

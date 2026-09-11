@@ -1,0 +1,30 @@
+resources:
+  jobs:
+    databricks_digest:
+      name: reddit-databricks-daily-digest
+      description: Fetch new News and Event posts from r/databricks and email a daily digest.
+      schedule:
+        quartz_cron_expression: 0 0 8 * * ?
+        timezone_id: Europe/Paris
+        pause_status: UNPAUSED
+      max_concurrent_runs: 1
+      parameters:
+        - name: digest_table
+          default: ${var.catalog}.${var.schema}.databricks_digest_posts
+        - name: secret_scope
+          default: ${var.secret_scope}
+      tasks:
+        - task_key: fetch_filter_email
+          spark_python_task:
+            python_file: ../src/databricks_digest.py
+            source: WORKSPACE
+            parameters:
+              - --digest-table
+              - "{{job.parameters.digest_table}}"
+              - --secret-scope
+              - "{{job.parameters.secret_scope}}"
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
