@@ -37,7 +37,9 @@ jobs:
       - name: Run pre-commit
         run: uv run pre-commit run --all-files --show-diff-on-failure
       - name: Test with pytest
-        run: uv run pytest --doctest-modules --junitxml=junit/test-results-${{ env.PYTHON_VERSION }}.xml --cov=. --cov-report=xml --cov-report=html
+        run: |
+          uv run pytest --doctest-modules --junitxml=junit/test-results-${{ env.PYTHON_VERSION }}.xml
+          --cov=src --cov=scripts --cov-report=xml --cov-report=html
       - name: Upload test results
         uses: actions/upload-artifact@v7
         with:
@@ -66,16 +68,7 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_BUNDLE_TARGET: dev
           BUNDLE_VAR_workspace_host: ${{ vars.DATABRICKS_HOST }}
-        run: |
-          output=$(databricks bundle validate 2>&1)
-          status=$?
-
-          if [ $status -eq 0 ]; then
-            echo "Validation OK!"
-          else
-            echo "$output" | grep -vE 'workspace|target'
-            exit $status
-          fi
+        run: databricks bundle validate >/dev/null && echo "Validation OK!"
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
