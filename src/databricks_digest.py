@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import html
 import json
 import os
 import smtplib
@@ -22,7 +23,7 @@ import feedparser
 REDDIT_URL = "https://www.reddit.com/r/databricks/new.json"
 REDDIT_RSS_URL = "https://old.reddit.com/r/databricks/search.rss"
 ALLOWED_FLAIRS = frozenset({"News", "Event"})
-LOCAL_TIMEZONE = ZoneInfo("Europe/Paris")
+LOCAL_TIMEZONE = ZoneInfo("Europe/Amsterdam")
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ def get_secret(scope: str, key: str) -> str:
 
 
 def fetch_posts(limit: int = 100) -> list[RedditPost]:
+    """Fetch News and Event posts, falling back to RSS when Reddit JSON is blocked."""
     try:
         return fetch_json_posts(limit)
     except Exception as error:
@@ -65,6 +67,7 @@ def fetch_posts(limit: int = 100) -> list[RedditPost]:
 
 
 def request_json(url: str) -> Any:
+    """Fetch and decode a JSON response from the specified URL."""
     request = Request(
         url,
         headers={"User-Agent": os.getenv("REDDIT_USER_AGENT", "databricks-digest/1.0")},
@@ -74,6 +77,7 @@ def request_json(url: str) -> Any:
 
 
 def fetch_json_posts(limit: int) -> list[RedditPost]:
+    """Fetch Reddit JSON posts and retain only allowed flairs."""
     query = urlencode({"limit": limit, "raw_json": 1})
     payload = request_json(f"{REDDIT_URL}?{query}")
 
@@ -98,6 +102,7 @@ def fetch_json_posts(limit: int) -> list[RedditPost]:
 
 
 def fetch_rss_posts(limit: int) -> list[RedditPost]:
+    """Fetch, deduplicate, sort, and limit Reddit posts from RSS feeds."""
     posts_by_id: dict[str, RedditPost] = {}
     per_flair_limit = max(1, limit // len(ALLOWED_FLAIRS))
     for flair in sorted(ALLOWED_FLAIRS):
@@ -115,6 +120,7 @@ def fetch_rss_posts(limit: int) -> list[RedditPost]:
 
 
 def request_xml(url: str) -> feedparser.FeedParserDict:
+    """Fetch and parse an RSS or Atom response from the specified URL."""
     request = Request(
         url,
         headers={"User-Agent": os.getenv("REDDIT_USER_AGENT", "databricks-digest/1.0")},
@@ -127,6 +133,7 @@ def request_xml(url: str) -> feedparser.FeedParserDict:
 
 
 def parse_rss_entry(entry: feedparser.FeedParserDict, flair: str) -> RedditPost:
+    """Convert one parsed RSS entry into a Reddit post record."""
     post_id = entry.id.removeprefix("t3_")
     title = entry.title
     url = entry.link
@@ -136,6 +143,7 @@ def parse_rss_entry(entry: feedparser.FeedParserDict, flair: str) -> RedditPost:
 
 
 def load_new_posts(spark: Any, table_name: str, posts: list[RedditPost]) -> list[RedditPost]:
+    """Create the digest table if needed and exclude posts already stored in it."""
     spark.sql(
         f"""CREATE TABLE IF NOT EXISTS {table_name} (
             post_id STRING,
@@ -151,20 +159,70 @@ def load_new_posts(spark: Any, table_name: str, posts: list[RedditPost]) -> list
 
 
 def send_digest(posts: list[RedditPost], scope: str) -> None:
+    """Format posts as plain text and HTML, then send them using Databricks secrets."""
     recipient = get_secret(scope, "recipient-email")
     password = get_secret(scope, "smtp-app-password")
     date_label = datetime.now(LOCAL_TIMEZONE).strftime("%Y-%m-%d")
+    sorted_posts = sorted(posts, key=lambda item: item.created_utc)
 
     message = EmailMessage()
     message["Subject"] = f"r/databricks News and Event digest - {date_label}"
     message["From"] = recipient
     message["To"] = recipient
     lines = [f"New r/databricks posts with News or Event flair: {len(posts)}", ""]
-    for post in sorted(posts, key=lambda item: item.created_utc):
+    for post in sorted_posts:
         lines.append(f"[{post.flair}] {post.title}")
         lines.append(f"{post.url} (u/{post.author})")
         lines.append("")
     message.set_content("\n".join(lines))
+
+    cards = []
+    for post in sorted_posts:
+        flair_color = "#ff4500" if post.flair == "News" else "#7193ff"
+        safe_flair = html.escape(post.flair)
+        safe_title = html.escape(post.title)
+        safe_url = html.escape(post.url, quote=True)
+        safe_author = html.escape(post.author)
+        cards.append(
+            f"""
+            <article style="background:#ffffff;border:1px solid #d6d6d6;border-radius:4px;
+                            margin:0 0 16px;padding:18px 20px;">
+                <div style="color:#878a8c;font-size:12px;font-weight:700;margin-bottom:10px;">
+                    r/databricks <span style="color:#a7a9aa;font-weight:400;">&middot; posted by u/{safe_author}</span>
+                </div>
+                <div style="color:{flair_color};font-size:11px;font-weight:700;letter-spacing:.6px;
+                            text-transform:uppercase;">{safe_flair}</div>
+                <h2 style="color:#1a1a1b;font-size:19px;line-height:1.3;margin:7px 0 12px;">
+                    <a href="{safe_url}" style="color:#1a1a1b;text-decoration:none;">{safe_title}</a>
+                </h2>
+                <a href="{safe_url}" style="color:#ff4500;font-size:13px;font-weight:700;text-decoration:none;">
+                    View post &rarr;
+                </a>
+            </article>
+            """
+        )
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+      <body style="background:#dae0e6;margin:0;padding:28px 12px;font-family:Arial,sans-serif;">
+        <main style="background:#f6f7f8;border-top:4px solid #ff4500;margin:0 auto;max-width:640px;
+                 padding:0 18px 18px;">
+          <header style="background:#ffffff;border-bottom:1px solid #d6d6d6;margin:0 -18px 22px;padding:24px;">
+            <div style="color:#ff4500;font-size:12px;font-weight:800;letter-spacing:1.5px;">r/DATABRICKS</div>
+            <h1 style="color:#1a1a1b;font-size:28px;line-height:1.15;margin:9px 0 8px;">News &amp; Events Digest</h1>
+            <p style="color:#7c7c7c;font-size:14px;margin:0;">
+              {html.escape(date_label)} &middot; {len(posts)} new posts
+            </p>
+          </header>
+          {"".join(cards)}
+          <footer style="color:#878a8c;font-size:12px;padding:8px 4px;text-align:center;">
+            Curated from r/databricks &middot; Delivered by Reddit digest
+          </footer>
+        </main>
+      </body>
+    </html>
+    """
+    message.add_alternative(html_content, subtype="html")
 
     context = ssl.create_default_context()
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=30) as smtp:
@@ -173,6 +231,7 @@ def send_digest(posts: list[RedditPost], scope: str) -> None:
 
 
 def save_posts(spark: Any, table_name: str, posts: list[RedditPost]) -> None:
+    """Merge newly delivered posts into the Databricks Delta table."""
     rows = [(post.post_id, post.title, post.url, post.flair, post.created_utc) for post in posts]
     if not rows:
         return
@@ -188,6 +247,7 @@ def save_posts(spark: Any, table_name: str, posts: list[RedditPost]) -> None:
 
 
 def main() -> None:
+    """Fetch new posts, email the digest, and record delivered posts."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--digest-table", required=True)
     parser.add_argument("--secret-scope", required=True)

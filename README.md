@@ -15,7 +15,7 @@ Scheduled Databricks Asset Bundle that fetches new `News` and `Event` link-flair
    databricks bundle deploy -t dev -p mixklim
    ```
 
-The job runs daily at 08:00 CET/CEST using the `Europe/Paris` timezone and stores processed Reddit IDs in `<catalog>.<schema>.databricks_digest_posts`. It sends no email when there are no new matching posts. Reddit's public feed is limited to its latest 100 posts, so the job should run at least daily to avoid gaps during unusually high activity.
+The job runs daily at 08:00 CET/CEST using the `Europe/Amsterdam` timezone and stores processed Reddit IDs in `<catalog>.<schema>.databricks_digest_posts`. It sends no email when there are no new matching posts. Reddit's public feed is limited to its latest 100 posts, so the job should run at least daily to avoid gaps during unusually high activity.
 
 ## Local checks
 

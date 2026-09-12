@@ -5,8 +5,8 @@ resources:
       description: Fetch new News and Event posts from r/databricks and email a daily digest.
       schedule:
         quartz_cron_expression: 0 0 8 * * ?
-        timezone_id: Europe/Paris
-        pause_status: UNPAUSED
+        timezone_id: Europe/Amsterdam
+        pause_status: PAUSED
       max_concurrent_runs: 1
       parameters:
         - name: digest_table
@@ -27,4 +27,4 @@ resources:
       environments:
         - environment_key: default
           spec:
-            environment_version: "4"
+            environment_version: "5"

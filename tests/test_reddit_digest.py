@@ -13,6 +13,7 @@ from src import databricks_digest
 
 
 def load_smoke_test():
+    """Load the smoke-test script as a module for integration-style tests."""
     spec = spec_from_file_location("smoke_test", "scripts/smoke_test.py")
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -20,6 +21,7 @@ def load_smoke_test():
 
 
 def make_post(post_id: str = "abc", flair: str = "News") -> databricks_digest.RedditPost:
+    """Build a representative Reddit post for tests."""
     return databricks_digest.RedditPost(
         post_id=post_id,
         title="Databricks announcement",
@@ -32,6 +34,7 @@ def make_post(post_id: str = "abc", flair: str = "News") -> databricks_digest.Re
 
 
 def test_fetch_posts_filters_to_news_and_event_flairs():
+    """Verify JSON fetching excludes posts with unrelated flairs."""
     payload = {
         "data": {
             "children": [
@@ -78,6 +81,7 @@ def test_fetch_posts_filters_to_news_and_event_flairs():
 
 
 def test_fetch_posts_uses_rss_after_json_is_blocked():
+    """Verify blocked JSON requests trigger the RSS fallback."""
     with (
         patch.object(databricks_digest, "fetch_json_posts", side_effect=HTTPError("url", 403, "Blocked", {}, None)),
         patch.object(databricks_digest, "fetch_rss_posts", return_value=[make_post()]) as fetch_rss,
@@ -89,6 +93,7 @@ def test_fetch_posts_uses_rss_after_json_is_blocked():
 
 
 def test_fetch_posts_reraises_non_rate_limit_errors():
+    """Verify non-rate-limit HTTP errors are propagated unchanged."""
     error = HTTPError("url", 500, "Server error", {}, None)
     with patch.object(databricks_digest, "fetch_json_posts", side_effect=error):
         try:
@@ -100,11 +105,13 @@ def test_fetch_posts_reraises_non_rate_limit_errors():
 
 
 def test_get_secret_reads_environment(monkeypatch):
+    """Verify secrets can be provided through environment variables."""
     monkeypatch.setenv("RECIPIENT_EMAIL", "user@example.com")
     assert databricks_digest.get_secret("scope", "recipient-email") == "user@example.com"
 
 
 def test_get_secret_reads_dbutils(monkeypatch):
+    """Verify secrets are read from Databricks dbutils when needed."""
     monkeypatch.delenv("SOME_KEY", raising=False)
     dbutils = MagicMock()
     dbutils.secrets.get.return_value = "secret-value"
@@ -115,6 +122,7 @@ def test_get_secret_reads_dbutils(monkeypatch):
 
 
 def test_get_secret_requires_runtime_or_environment(monkeypatch):
+    """Verify missing local and Databricks secret providers raise an error."""
     monkeypatch.delenv("MISSING_KEY", raising=False)
     monkeypatch.delattr(databricks_digest, "dbutils", raising=False)
     with patch.dict(sys.modules, {"databricks": None, "databricks.sdk": None, "databricks.sdk.runtime": None}):
@@ -127,6 +135,7 @@ def test_get_secret_requires_runtime_or_environment(monkeypatch):
 
 
 def test_load_new_posts_excludes_processed_ids():
+    """Verify stored post IDs are excluded from new results."""
     spark = MagicMock()
     spark.sql.return_value.collect.return_value = [MagicMock(post_id="known")]
 
@@ -139,6 +148,7 @@ def test_load_new_posts_excludes_processed_ids():
 
 
 def test_request_json_loads_response():
+    """Verify JSON responses are decoded from the HTTP body."""
     response = MagicMock()
     response.__enter__.return_value = BytesIO(b'{"data": {"children": []}}')
     with patch.object(databricks_digest, "urlopen", return_value=response):
@@ -146,6 +156,7 @@ def test_request_json_loads_response():
 
 
 def test_rss_posts_are_parsed_and_deduplicated():
+    """Verify RSS entries are parsed, deduplicated, and ordered by recency."""
     first = feedparser.FeedParserDict(id="t3_first", title="First", link="https://reddit.test/first", author="/u/a")
     first.published_parsed = datetime(2026, 1, 1, tzinfo=UTC).timetuple()
     duplicate = feedparser.FeedParserDict(
@@ -163,6 +174,7 @@ def test_rss_posts_are_parsed_and_deduplicated():
 
 
 def test_rss_posts_report_http_errors():
+    """Verify RSS HTTP failures are reported as runtime errors."""
     error = HTTPError("url", 429, "Too many requests", {}, None)
     with patch.object(databricks_digest, "request_xml", side_effect=error):
         try:
@@ -174,6 +186,7 @@ def test_rss_posts_report_http_errors():
 
 
 def test_request_xml_rejects_non_rss_response():
+    """Verify an HTML challenge page is rejected as invalid RSS."""
     response = MagicMock()
     response.__enter__.return_value = BytesIO(b"<html>challenge</html>")
     with (
@@ -189,6 +202,7 @@ def test_request_xml_rejects_non_rss_response():
 
 
 def test_request_xml_returns_valid_feed():
+    """Verify a valid parsed feed is returned to the caller."""
     response = MagicMock()
     response.__enter__.return_value = BytesIO(b"<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'/>")
     feed = feedparser.FeedParserDict(bozo=False, entries=[])
@@ -200,6 +214,7 @@ def test_request_xml_returns_valid_feed():
 
 
 def test_send_digest_uses_gmail_secrets_and_sends_sorted_posts():
+    """Verify digest delivery uses secrets and orders posts chronologically."""
     first = make_post("first", "Event")
     second = make_post("second", "News")
     first = databricks_digest.RedditPost(**{**first.__dict__, "created_utc": 2})
@@ -216,17 +231,23 @@ def test_send_digest_uses_gmail_secrets_and_sends_sorted_posts():
     message = smtp.send_message.call_args.args[0]
     assert message["To"] == "to@gmail.com"
     assert message["From"] == "to@gmail.com"
-    assert message.get_content().index("second") < message.get_content().index("first")
+    plain_content = message.get_body(preferencelist=("plain",)).get_content()
+    html_content = message.get_body(preferencelist=("html",)).get_content()
+    assert plain_content.index("second") < plain_content.index("first")
+    assert "News &amp; Events Digest" in html_content
+    assert html_content.index("second") < html_content.index("first")
     smtp.login.assert_called_once_with("to@gmail.com", "app-password")
 
 
 def test_save_posts_skips_empty_input():
+    """Verify saving an empty post list performs no DataFrame write."""
     spark = MagicMock()
     databricks_digest.save_posts(spark, "catalog.schema.posts", [])
     spark.createDataFrame.assert_not_called()
 
 
 def test_save_posts_merges_rows():
+    """Verify new posts are converted to a temporary Spark view for merging."""
     spark = MagicMock()
     databricks_digest.save_posts(spark, "catalog.schema.posts", [make_post()])
     spark.createDataFrame.assert_called_once()
@@ -234,6 +255,7 @@ def test_save_posts_merges_rows():
 
 
 def test_parse_rss_entry_removes_prefix_and_uses_author():
+    """Verify RSS IDs and author prefixes are normalized."""
     entry = feedparser.FeedParserDict(
         id="t3_post",
         title="Title",
@@ -247,10 +269,10 @@ def test_parse_rss_entry_removes_prefix_and_uses_author():
 
 
 def test_smoke_test_main_dry_run(capsys):
+    """Verify the smoke test dry-run path does not send email."""
     smoke_test = load_smoke_test()
     with (
         patch.object(smoke_test, "load_dotenv"),
-        patch.object(smoke_test, "fetch_posts", return_value=[make_post()]),
         patch.object(sys, "argv", ["smoke_test.py", "--dry-run", "--limit", "1"]),
     ):
         smoke_test.main()
@@ -259,23 +281,27 @@ def test_smoke_test_main_dry_run(capsys):
 
 
 def test_smoke_test_main_sends_email():
+    """Verify the smoke test sends email when dry-run is disabled."""
     smoke_test = load_smoke_test()
     with (
         patch.object(smoke_test, "load_dotenv"),
-        patch.object(smoke_test, "fetch_posts", return_value=[make_post()]),
         patch.object(smoke_test, "send_digest") as send_digest,
         patch.object(sys, "argv", ["smoke_test.py", "--limit", "1"]),
     ):
         smoke_test.main()
 
-    send_digest.assert_called_once_with([make_post()], "local")
+    sent_posts = send_digest.call_args.args[0]
+    assert len(sent_posts) == 1
+    assert sent_posts[0].title == "Smoke Test Post"
+    send_digest.assert_called_once_with(sent_posts, "local")
 
 
 def test_smoke_test_main_reports_fetch_errors(capsys):
+    """Verify the smoke test reports fetch failures through its argument parser."""
     smoke_test = load_smoke_test()
     with (
         patch.object(smoke_test, "load_dotenv"),
-        patch.object(smoke_test, "fetch_posts", side_effect=RuntimeError("blocked")),
+        patch.object(smoke_test, "RedditPost", side_effect=RuntimeError("blocked")),
         patch.object(sys, "argv", ["smoke_test.py"]),
     ):
         try:
@@ -288,6 +314,7 @@ def test_smoke_test_main_reports_fetch_errors(capsys):
 
 
 def test_databricks_main_handles_empty_run(monkeypatch):
+    """Verify the Databricks entry point skips email when no posts are new."""
     spark = MagicMock()
     spark_module = types.ModuleType("pyspark.sql")
     spark_module.SparkSession = MagicMock(builder=MagicMock(getOrCreate=MagicMock(return_value=spark)))
@@ -299,6 +326,7 @@ def test_databricks_main_handles_empty_run(monkeypatch):
 
 
 def test_databricks_main_sends_and_saves(monkeypatch):
+    """Verify the Databricks entry point sends and persists new posts."""
     spark = MagicMock()
     spark_module = types.ModuleType("pyspark.sql")
     spark_module.SparkSession = MagicMock(builder=MagicMock(getOrCreate=MagicMock(return_value=spark)))

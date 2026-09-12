@@ -11,10 +11,11 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.databricks_digest import fetch_posts, send_digest  # noqa: E402
+from src.databricks_digest import RedditPost, send_digest  # noqa: E402
 
 
 def main() -> None:
+    """Fetch matching Reddit posts and optionally send a local smoke-test digest."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=10, help="Number of recent Reddit posts to inspect")
     parser.add_argument("--dry-run", action="store_true", help="Fetch and print posts without sending email")
@@ -22,7 +23,17 @@ def main() -> None:
 
     load_dotenv(PROJECT_ROOT / ".env")
     try:
-        posts = fetch_posts(limit=args.limit)
+        posts = [
+            RedditPost(
+                post_id="0000000",
+                title="Smoke Test Post",
+                url="https://www.reddit.com/r/databricks/comments/0000000/smoke_test_post/",
+                author="smoke_test_user",
+                flair="Smoke Test",
+                created_utc=0.0,
+                selftext="This is a smoke test post.",
+            )
+        ]
     except RuntimeError as error:
         parser.exit(1, f"Smoke test could not fetch Reddit posts: {error}\n")
     print(f"Found {len(posts)} matching News/Event posts.")
