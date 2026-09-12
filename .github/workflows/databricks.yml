@@ -17,7 +17,7 @@ env:
   UV_VERSION: "0.12.12"
 
 jobs:
-  validate:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -70,7 +70,7 @@ jobs:
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: validate
+    needs: build
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -82,4 +82,18 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           BUNDLE_VAR_principal_name: ${{ secrets.DATABRICKS_PRINCIPAL_NAME }}
           DATABRICKS_BUNDLE_TARGET: prod
-        run: databricks bundle deploy -t $DATABRICKS_BUNDLE_TARGET --force
+        run: databricks bundle deploy --force
+
+  run:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+      - uses: databricks/setup-cli@main
+      - run: databricks bundle run databricks_digest --refresh-all
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_BUNDLE_TARGET: prod

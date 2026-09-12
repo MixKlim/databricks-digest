@@ -1,7 +1,7 @@
 resources:
   jobs:
     databricks_digest:
-      name: reddit-databricks-daily-digest
+      name: databricks-digest-job
       description: Fetch new News and Event posts from r/databricks and email a daily digest.
       schedule:
         quartz_cron_expression: 0 0 8 * * ?
