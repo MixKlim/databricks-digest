@@ -8,6 +8,9 @@ resources:
         timezone_id: Europe/Amsterdam
         pause_status: PAUSED
       max_concurrent_runs: 1
+      email_notifications:
+        on_failure:
+          - mixklim@gmail.com
       parameters:
         - name: digest_table
           default: ${var.catalog}.${var.schema}.databricks_digest_posts
@@ -28,3 +31,6 @@ resources:
         - environment_key: default
           spec:
             environment_version: "5"
+            dependencies:
+              - feedparser>=6.0
+              - tzdata>=2024.1

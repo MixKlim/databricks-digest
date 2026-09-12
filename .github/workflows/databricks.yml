@@ -80,6 +80,6 @@ jobs:
         env:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          BUNDLE_VAR_principal_name: ${{ vars.DATABRICKS_PRINCIPAL_NAME }}
+          BUNDLE_VAR_principal_name: ${{ secrets.DATABRICKS_PRINCIPAL_NAME }}
           DATABRICKS_BUNDLE_TARGET: prod
         run: databricks bundle deploy -t $DATABRICKS_BUNDLE_TARGET --force
