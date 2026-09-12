@@ -1,6 +1,6 @@
 # Databricks Reddit Digest
 
-[![Build](https://github.com/MixKlim/databricks-digest/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/MixKlim/databricks-digest/actions/workflows/build.yml)
+[![CI/CD](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks.yml/badge.svg)](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks.yml)
 [![Coverage Status](https://raw.githubusercontent.com/mixklim/databricks-digest/main/reports/coverage/coverage-badge.svg?dummy=8484744)](https://raw.githubusercontent.com/mixklim/databricks-digest/main/reports/coverage/index.html)
 
 Scheduled Databricks Asset Bundle that fetches new `News` and `Event` link-flair posts from [r/databricks](https://www.reddit.com/r/databricks/) and sends a Gmail digest.
