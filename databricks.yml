@@ -14,6 +14,9 @@ variables:
   secret_scope:
     description: Databricks secret scope containing Gmail and Reddit settings
     default: databricks-digest
+  principal_name:
+    description: Databricks principal name for the bundle artifacts
+    default: databricks_digest
 
 targets:
   dev:
@@ -26,3 +29,4 @@ targets:
     mode: production
     workspace:
       host: https://dbc-b8858560-a152.cloud.databricks.com
+      root_path: /Workspace/Users/${var.principal_name}/.bundle/${bundle.name}/${bundle.target}
