@@ -5,9 +5,6 @@ include:
   - resources/*.yml
 
 variables:
-  workspace_host:
-    description: Databricks workspace URL
-    default: https://dbc-b8858560-a152.cloud.databricks.com
   catalog:
     description: Unity Catalog catalog for the digest state table
     default: workspace
@@ -28,4 +25,4 @@ targets:
   prod:
     mode: production
     workspace:
-      host: ${var.workspace_host}
+      host: https://dbc-b8858560-a152.cloud.databricks.com

@@ -66,8 +66,6 @@ jobs:
         env:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          DATABRICKS_BUNDLE_TARGET: dev
-          BUNDLE_VAR_workspace_host: ${{ vars.DATABRICKS_HOST }}
         run: databricks bundle validate >/dev/null && echo "Validation OK!"
 
   deploy:
@@ -83,5 +81,4 @@ jobs:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_BUNDLE_TARGET: prod
-          BUNDLE_VAR_workspace_host: ${{ vars.DATABRICKS_HOST }}
-        run: databricks bundle deploy
+        run: databricks bundle deploy -t $DATABRICKS_BUNDLE_TARGET --force
