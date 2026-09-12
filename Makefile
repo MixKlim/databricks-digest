@@ -25,7 +25,7 @@ eval:
 
 test:
 	@echo "Running unit test"
-	uv run pytest --doctest-modules --cov=. --cov-report=html
+	uv run pytest --doctest-modules --cov=src --cov=scripts --cov-report=html
 
 cov:
 	@echo "Creating coverage badge"

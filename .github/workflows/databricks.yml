@@ -66,7 +66,16 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_BUNDLE_TARGET: dev
           BUNDLE_VAR_workspace_host: ${{ vars.DATABRICKS_HOST }}
-        run: databricks bundle validate
+        run: |
+          output=$(databricks bundle validate 2>&1)
+          status=$?
+
+          if [ $status -eq 0 ]; then
+            echo "Validation OK!"
+          else
+            echo "$output" | grep -vE 'workspace|target'
+            exit $status
+          fi
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
