@@ -38,7 +38,7 @@ jobs:
         run: uv run pre-commit run --all-files --show-diff-on-failure
       - name: Test with pytest
         run: |
-          uv run pytest --doctest-modules --junitxml=junit/test-results-${{ env.PYTHON_VERSION }}.xml
+          uv run pytest --doctest-modules --junitxml=junit/test-results-${{ env.PYTHON_VERSION }}.xml \
           --cov=src --cov=scripts --cov-report=xml --cov-report=html
       - name: Upload test results
         uses: actions/upload-artifact@v7
