@@ -12,7 +12,7 @@ variables:
     description: Unity Catalog schema for the digest state table
     default: default
   secret_scope:
-    description: Databricks secret scope containing Gmail and Reddit settings
+    description: Databricks secret scope containing Gmail settings
     default: databricks-digest
   principal_name:
     description: Databricks principal name for the bundle artifacts
@@ -24,9 +24,19 @@ targets:
     default: true
     workspace:
       host: https://dbc-b8858560-a152.cloud.databricks.com
+    resources:
+      jobs:
+        databricks_digest:
+          schedule:
+            pause_status: PAUSED
 
   prod:
     mode: production
     workspace:
       host: https://dbc-b8858560-a152.cloud.databricks.com
       root_path: /Workspace/Users/${var.principal_name}/.bundle/${bundle.name}/${bundle.target}
+    resources:
+      jobs:
+        databricks_digest:
+          schedule:
+            pause_status: UNPAUSED
