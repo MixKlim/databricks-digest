@@ -1,5 +1,5 @@
 [project]
-name = "databricks-reddit-digest"
+name = "databricks-digest"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = ["feedparser>=6.0", "python-dotenv>=1.0", "tzdata>=2024.1"]

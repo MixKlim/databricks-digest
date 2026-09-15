@@ -2,18 +2,17 @@ resources:
   jobs:
     databricks_digest:
       name: databricks-digest-job
-      description: Fetch new News and Event posts from r/databricks and email a daily digest.
+      description: Fetch official Azure Databricks release notes and email a daily digest.
       schedule:
         quartz_cron_expression: 0 0 8 * * ?
         timezone_id: Europe/Amsterdam
-        pause_status: PAUSED
       max_concurrent_runs: 1
       email_notifications:
         on_failure:
           - mixklim@gmail.com
       parameters:
         - name: digest_table
-          default: ${var.catalog}.${var.schema}.databricks_digest_posts
+          default: ${var.catalog}.${var.schema}.databricks_release_notes
         - name: secret_scope
           default: ${var.secret_scope}
       tasks:

@@ -1,14 +1,14 @@
-# Databricks Reddit Digest
+# Databricks Release Notes Digest
 
 [![CI/CD](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks.yml/badge.svg)](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks.yml)
 [![Coverage Status](https://raw.githubusercontent.com/mixklim/databricks-digest/main/reports/coverage/coverage-badge.svg?dummy=8484744)](https://raw.githubusercontent.com/mixklim/databricks-digest/main/reports/coverage/index.html)
 
-Scheduled Databricks Asset Bundle that fetches new `News` and `Event` link-flair posts from [r/databricks](https://www.reddit.com/r/databricks/) and sends a Gmail digest.
+Scheduled Databricks Asset Bundle that reads the official [Azure Databricks release-notes RSS feed](https://learn.microsoft.com/en-us/azure/databricks/feed.xml) and sends a Gmail digest. Microsoft documents this feed on the [Azure Databricks release-notes page](https://learn.microsoft.com/en-us/azure/databricks/release-notes/).
 
 ## Databricks setup
 
 1. Create a Unity Catalog schema for the state table. The defaults are catalog `workspace` and schema `default`; override them with bundle variables if needed.
-2. Create a Databricks secret scope named `reddit-digest` and add these keys:
+2. Create a Databricks secret scope named `databricks-digest` and add these keys:
    - `recipient-email`: the Gmail address used to send and receive the digest.
    - `smtp-app-password`: a Gmail app password, not the normal account password.
 3. Install the Databricks CLI and authenticate to the workspace.
@@ -18,7 +18,9 @@ Scheduled Databricks Asset Bundle that fetches new `News` and `Event` link-flair
    databricks bundle deploy -t dev -p mixklim
    ```
 
-The job runs daily at 08:00 CET/CEST using the `Europe/Amsterdam` timezone and stores processed Reddit IDs in `<catalog>.<schema>.databricks_digest_posts`. It sends no email when there are no new matching posts. Reddit's public feed is limited to its latest 100 posts, so the job should run at least daily to avoid gaps during unusually high activity.
+The job runs daily at 08:00 CET/CEST using the `Europe/Amsterdam` timezone and stores processed release-note IDs in `<catalog>.<schema>.databricks_release_notes`. It sends no email when there are no new feed items.
+
+The feed client uses the fixed Microsoft Learn HTTPS endpoint, a bounded 30-second timeout, a descriptive user agent, and validates every returned link before including it in email. The Delta state table makes delivery idempotent across daily runs and feed refreshes.
 
 ## Local checks
 
@@ -32,19 +34,17 @@ uv run pytest
 
 ### Local email smoke test
 
-This tests the live Reddit fetch and Gmail SMTP delivery without requiring PySpark. Use a Gmail app password, not your normal Gmail password. Copy `.env.example` to `.env`, fill in the values, then run:
+This fetches real release notes from Microsoft Learn and can send the matching window through Gmail without requiring PySpark. Use a Gmail app password, not your normal Gmail password. Copy `.env.example` to `.env`, fill in the values, then run:
 
 ```powershell
 Copy-Item .env.example .env
 # Edit .env and replace the placeholder values.
 uv sync --dev
-uv run python scripts/smoke_test.py --dry-run --limit 10
-uv run python scripts/smoke_test.py
+uv run python scripts/smoke_test.py --days-ago 3 --dry-run
+uv run python scripts/smoke_test.py --days-ago 1
 ```
 
-The first command fetches and prints matching posts without sending mail. The second sends all matching posts in the selected Reddit page and does not update the Delta state table. Use `--limit 10` to reduce the number of posts included. The unit tests cover the filtering, deduplication, and email composition without sending mail:
-
-The fetcher uses Reddit's JSON feed first and attempts flair-filtered RSS from `old.reddit.com` when Reddit blocks or rate-limits the JSON endpoint. Reddit may return a bot or login challenge instead of RSS; in that case, use Reddit API OAuth credentials or run from a network where Reddit's public feed is available.
+`--days-ago` selects one local calendar date: `0` means today, `1` means yesterday, and `3` means three days ago. It defaults to `1`. The first command prints matching notes without sending mail. The second sends the matching notes and does not update the Delta state table. The email uses inline styling and text-based Microsoft Learn/Databricks brand lockups so it remains presentable when mail clients block external images. Unit tests cover feed parsing, date filtering, URL validation, state deduplication, and email composition:
 
 ```text
 make test
@@ -59,7 +59,7 @@ databricks bundle deploy -t dev -p mixklim
 databricks bundle run -t dev -p mixklim databricks_digest
 ```
 
-Check the run output and the recipient inbox. A second run with no new matching Reddit posts should report `No new News or Event posts found; no email sent.`
+Check the run output and the recipient inbox. A second run with no new release notes should report `No new Azure Databricks release notes found; no email sent.`
 
 ## GitHub Actions
 
