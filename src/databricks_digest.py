@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import html
+import logging
 import os
 import re
 import smtplib
@@ -21,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import feedparser
 
+LOGGER = logging.getLogger("databricks-digest")
 RELEASE_NOTES_FEED_URL = "https://learn.microsoft.com/en-us/azure/databricks/feed.xml"
 FEED_USER_AGENT = "databricks-release-digest/1.0"
 LOCAL_TIMEZONE = ZoneInfo("Europe/Amsterdam")
@@ -61,14 +63,19 @@ def get_secret(scope: str, key: str) -> str:
 
 def fetch_release_notes(
     limit: int | None = None,
-    days_till_today: int | None = None,
+    days_ago: int | None = None,
     now: datetime | None = None,
 ) -> list[ReleaseNote]:
-    """Fetch release notes, optionally limited to a recent inclusive local-date window."""
+    """Fetch release notes, optionally limited to an inclusive local date range."""
     if limit is not None and limit < 1:
         return []
-    if days_till_today is not None and days_till_today < 0:
-        raise ValueError("days_till_today must be zero or greater.")
+    if days_ago is not None and days_ago < 0:
+        raise ValueError("days_ago must be zero or greater.")
+    LOGGER.info(
+        "Fetching release notes from Microsoft Learn feed (limit=%s, days_ago=%s).",
+        limit,
+        days_ago,
+    )
     try:
         feed = request_feed(RELEASE_NOTES_FEED_URL)
     except urllib.error.HTTPError as error:
@@ -77,10 +84,17 @@ def fetch_release_notes(
         raise RuntimeError("Microsoft Learn returned an invalid release-notes feed.")
 
     notes = [parse_feed_entry(entry) for entry in feed.entries]
-    if days_till_today is not None:
+    LOGGER.info("Parsed %d release notes from Microsoft Learn feed.", len(notes))
+    if days_ago is not None:
         run_date = (now or datetime.now(LOCAL_TIMEZONE)).astimezone(LOCAL_TIMEZONE).date()
-        first_date = run_date - timedelta(days=days_till_today)
-        notes = [note for note in notes if first_date <= release_date(note) <= run_date]
+        start_date = run_date - timedelta(days=days_ago)
+        notes = [note for note in notes if start_date <= release_date(note) <= run_date]
+        LOGGER.info(
+            "Filtered release notes to local dates %s through %s: %d notes.",
+            start_date,
+            run_date,
+            len(notes),
+        )
     return sorted(notes, key=lambda note: note.published_utc, reverse=True)[:limit]
 
 
@@ -189,6 +203,7 @@ def render_summary(summary: str, base_url: str) -> tuple[str, str]:
 
 def load_new_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]) -> list[ReleaseNote]:
     """Create the digest table if needed and exclude already delivered notes."""
+    LOGGER.info("Ensuring digest table exists: %s", table_name)
     spark.sql(
         f"""CREATE TABLE IF NOT EXISTS {table_name} (
             note_id STRING,
@@ -200,11 +215,19 @@ def load_new_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]
         ) USING DELTA"""
     )
     known_ids = {row.note_id for row in spark.sql(f"SELECT note_id FROM {table_name}").collect()}
-    return [note for note in notes if note.note_id not in known_ids]
+    new_notes = [note for note in notes if note.note_id not in known_ids]
+    LOGGER.info(
+        "Compared %d fetched notes with %d stored note IDs; %d are new.",
+        len(notes),
+        len(known_ids),
+        len(new_notes),
+    )
+    return new_notes
 
 
 def send_digest(notes: list[ReleaseNote], scope: str) -> None:
     """Format release notes as plain text and HTML, then send them by Gmail."""
+    LOGGER.info("Preparing digest email for %d release notes using secret scope %s.", len(notes), scope)
     recipient = get_secret(scope, "recipient-email")
     password = get_secret(scope, "smtp-app-password")
     date_label = datetime.now(LOCAL_TIMEZONE).strftime("%Y-%m-%d")
@@ -291,16 +314,20 @@ def send_digest(notes: list[ReleaseNote], scope: str) -> None:
     message.add_alternative(html_content, subtype="html")
 
     context = ssl.create_default_context()
+    LOGGER.info("Connecting to Gmail SMTP to deliver digest to %s.", recipient)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=30) as smtp:
         smtp.login(recipient, password)
         smtp.send_message(message)
+    LOGGER.info("Digest email delivered successfully to %s.", recipient)
 
 
 def save_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]) -> None:
     """Merge newly delivered release notes into the Databricks Delta table."""
     rows = [(note.note_id, note.title, note.url, note.category, note.published_utc) for note in notes]
     if not rows:
+        LOGGER.info("No release notes to persist in %s.", table_name)
         return
+    LOGGER.info("Persisting %d delivered release notes to %s.", len(rows), table_name)
     new_notes = spark.createDataFrame(rows, ["note_id", "title", "note_url", "category", "published_utc"])
     new_notes.createOrReplaceTempView("new_release_notes")
     spark.sql(
@@ -311,24 +338,29 @@ def save_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]) ->
         VALUES (source.note_id, source.title, source.note_url, source.category,
             source.published_utc, current_timestamp())"""
     )
+    LOGGER.info("Persisted %d delivered release notes to %s.", len(rows), table_name)
 
 
 def main() -> None:
     """Fetch release notes, email the digest, and record delivered items."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--digest-table", required=True)
     parser.add_argument("--secret-scope", required=True)
     args = parser.parse_args()
+    LOGGER.info("Starting Databricks digest job for table %s.", args.digest_table)
 
     from pyspark.sql import SparkSession
 
     spark = SparkSession.builder.getOrCreate()
-    new_notes = load_new_release_notes(spark, args.digest_table, fetch_release_notes())
+    new_notes = load_new_release_notes(spark, args.digest_table, fetch_release_notes(days_ago=1))
     if not new_notes:
+        LOGGER.info("No new release notes found; skipping email delivery.")
         print("No new Azure Databricks release notes found; no email sent.")
         return
     send_digest(new_notes, args.secret_scope)
     save_release_notes(spark, args.digest_table, new_notes)
+    LOGGER.info("Databricks digest job completed successfully with %d release notes.", len(new_notes))
     print(f"Sent digest containing {len(new_notes)} release notes.")
 
 

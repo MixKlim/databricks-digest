@@ -15,13 +15,13 @@ from src.databricks_digest import fetch_release_notes, send_digest  # noqa: E402
 
 
 def main() -> None:
-    """Fetch a recent release-note window and optionally send a local digest."""
+    """Fetch one day's release notes and optionally send a local digest."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--days-till-today",
+        "--days-ago",
         type=int,
         default=1,
-        help="Include today and this many previous local calendar days (default: 1)",
+        help="Fetch notes from this many local calendar days ago through today (default: 1)",
     )
     parser.add_argument("--limit", type=int, default=None, help="Optional maximum number of feed notes")
     parser.add_argument("--dry-run", action="store_true", help="Print matching notes without sending email")
@@ -29,7 +29,7 @@ def main() -> None:
 
     load_dotenv(PROJECT_ROOT / ".env")
     try:
-        notes = fetch_release_notes(limit=args.limit, days_till_today=args.days_till_today)
+        notes = fetch_release_notes(limit=args.limit, days_ago=args.days_ago)
     except (RuntimeError, ValueError) as error:
         parser.exit(1, f"Smoke test could not fetch release notes: {error}\n")
     print(f"Found {len(notes)} release notes in the requested date window.")

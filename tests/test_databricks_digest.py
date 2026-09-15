@@ -55,28 +55,28 @@ def test_fetch_release_notes_sorts_and_limits_feed_entries():
     assert notes[0].category == "Platform"
 
 
-def test_fetch_release_notes_filters_inclusive_local_date_window():
-    """Verify the date window includes today and the requested previous days."""
+def test_fetch_release_notes_filters_to_inclusive_local_date_range():
+    """Verify the lookback window includes its start date and today."""
     feed = MagicMock(
         bozo=False,
         entries=[
-            make_entry("before", "Before", 12),
-            make_entry("inside", "Inside", 14),
+            make_entry("older", "Older", 13),
+            make_entry("yesterday", "Yesterday", 14),
             make_entry("today", "Today", 15),
         ],
     )
     run_time = datetime(2026, 1, 15, 12, tzinfo=UTC)
     with patch.object(databricks_digest, "request_feed", return_value=feed):
-        notes = databricks_digest.fetch_release_notes(days_till_today=1, now=run_time)
+        notes = databricks_digest.fetch_release_notes(days_ago=1, now=run_time)
 
-    assert [note.note_id for note in notes] == ["today", "inside"]
+    assert [note.note_id for note in notes] == ["today", "yesterday"]
 
 
-def test_fetch_release_notes_rejects_negative_date_window():
-    """Verify invalid date windows fail before making a network request."""
+def test_fetch_release_notes_rejects_negative_days_ago():
+    """Verify an invalid exact-day window fails before making a network request."""
     with patch.object(databricks_digest, "request_feed") as request:
-        with pytest.raises(ValueError, match="zero or greater"):
-            databricks_digest.fetch_release_notes(days_till_today=-1)
+        with pytest.raises(ValueError, match="days_ago must be zero or greater"):
+            databricks_digest.fetch_release_notes(days_ago=-1)
     request.assert_not_called()
 
 
@@ -287,7 +287,7 @@ def test_smoke_test_main_dry_run(capsys):
     with (
         patch.object(smoke_test, "load_dotenv"),
         patch.object(smoke_test, "fetch_release_notes", return_value=[make_note()]),
-        patch.object(sys, "argv", ["smoke_test.py", "--days-till-today", "3", "--dry-run"]),
+        patch.object(sys, "argv", ["smoke_test.py", "--days-ago", "1", "--dry-run"]),
     ):
         smoke_test.main()
     assert "Dry run complete" in capsys.readouterr().out
@@ -339,7 +339,7 @@ def test_databricks_main_handles_empty_run(monkeypatch):
     spark_module = types.ModuleType("pyspark.sql")
     spark_module.SparkSession = MagicMock(builder=MagicMock(getOrCreate=MagicMock(return_value=spark)))
     monkeypatch.setitem(sys.modules, "pyspark.sql", spark_module)
-    monkeypatch.setattr(databricks_digest, "fetch_release_notes", lambda: [])
+    monkeypatch.setattr(databricks_digest, "fetch_release_notes", lambda **_: [])
     monkeypatch.setattr(databricks_digest, "load_new_release_notes", lambda *_: [])
     monkeypatch.setattr(sys, "argv", ["databricks_digest.py", "--digest-table", "table", "--secret-scope", "scope"])
     databricks_digest.main()
@@ -352,7 +352,7 @@ def test_databricks_main_sends_and_saves(monkeypatch):
     spark_module.SparkSession = MagicMock(builder=MagicMock(getOrCreate=MagicMock(return_value=spark)))
     monkeypatch.setitem(sys.modules, "pyspark.sql", spark_module)
     notes = [make_note()]
-    monkeypatch.setattr(databricks_digest, "fetch_release_notes", lambda: notes)
+    monkeypatch.setattr(databricks_digest, "fetch_release_notes", lambda **_: notes)
     monkeypatch.setattr(databricks_digest, "load_new_release_notes", lambda *_: notes)
     monkeypatch.setattr(databricks_digest, "send_digest", MagicMock())
     monkeypatch.setattr(databricks_digest, "save_release_notes", MagicMock())
