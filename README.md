@@ -40,11 +40,11 @@ This fetches real release notes from Microsoft Learn and can send the matching w
 Copy-Item .env.example .env
 # Edit .env and replace the placeholder values.
 uv sync --dev
-uv run python scripts/smoke_test.py --days-ago 3 --dry-run
-uv run python scripts/smoke_test.py --days-ago 1
+uv run python scripts/smoke_test.py --pub-date 2026-01-01 --dry-run
+uv run python scripts/smoke_test.py --pub-date 2026-01-01
 ```
 
-`--days-ago` selects one local calendar date: `0` means today, `1` means yesterday, and `3` means three days ago. It defaults to `1`. The first command prints matching notes without sending mail. The second sends the matching notes and does not update the Delta state table. The email uses inline styling and text-based Microsoft Learn/Databricks brand lockups so it remains presentable when mail clients block external images. Unit tests cover feed parsing, date filtering, URL validation, state deduplication, and email composition:
+`--pub-date` selects one local publication date in `YYYY-MM-DD` format. The first command prints matching notes without sending mail. The second sends the matching notes and does not update the Delta state table. The email uses inline styling and text-based Microsoft Learn/Databricks brand lockups so it remains presentable when mail clients block external images. Unit tests cover feed parsing, date filtering, URL validation, state deduplication, and email composition:
 
 ```text
 make test

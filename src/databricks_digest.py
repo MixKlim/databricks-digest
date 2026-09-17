@@ -63,18 +63,15 @@ def get_secret(scope: str, key: str) -> str:
 
 def fetch_release_notes(
     limit: int | None = None,
-    days_ago: int | None = None,
-    now: datetime | None = None,
+    pub_date: date | None = None,
 ) -> list[ReleaseNote]:
-    """Fetch release notes, optionally limited to an inclusive local date range."""
+    """Fetch release notes, optionally limited to one local publication date."""
     if limit is not None and limit < 1:
         return []
-    if days_ago is not None and days_ago < 0:
-        raise ValueError("days_ago must be zero or greater.")
     LOGGER.info(
-        "Fetching release notes from Microsoft Learn feed (limit=%s, days_ago=%s).",
+        "Fetching release notes from Microsoft Learn feed (limit=%s, pub_date=%s).",
         limit,
-        days_ago,
+        pub_date,
     )
     try:
         feed = request_feed(RELEASE_NOTES_FEED_URL)
@@ -85,16 +82,20 @@ def fetch_release_notes(
 
     notes = [parse_feed_entry(entry) for entry in feed.entries]
     LOGGER.info("Parsed %d release notes from Microsoft Learn feed.", len(notes))
-    if days_ago is not None:
-        run_date = (now or datetime.now(LOCAL_TIMEZONE)).astimezone(LOCAL_TIMEZONE).date()
-        start_date = run_date - timedelta(days=days_ago)
-        notes = [note for note in notes if start_date <= release_date(note) <= run_date]
+    if pub_date is not None:
+        notes = [note for note in notes if release_date(note) == pub_date]
         LOGGER.info(
-            "Filtered release notes to local dates %s through %s: %d notes.",
-            start_date,
-            run_date,
+            "Filtered release notes to local publication date %s: %d notes.",
+            pub_date,
             len(notes),
         )
+    unique_notes: dict[tuple[date, str], ReleaseNote] = {}
+    for note in notes:
+        deduplication_key = (release_date(note), " ".join(note.title.split()).casefold())
+        unique_notes.setdefault(deduplication_key, note)
+    if len(unique_notes) != len(notes):
+        LOGGER.info("Removed %d duplicate release notes.", len(notes) - len(unique_notes))
+    notes = list(unique_notes.values())
     return sorted(notes, key=lambda note: note.published_utc, reverse=True)[:limit]
 
 
@@ -225,12 +226,12 @@ def load_new_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]
     return new_notes
 
 
-def send_digest(notes: list[ReleaseNote], scope: str) -> None:
+def send_digest(notes: list[ReleaseNote], scope: str, pub_date: date) -> None:
     """Format release notes as plain text and HTML, then send them by Gmail."""
     LOGGER.info("Preparing digest email for %d release notes using secret scope %s.", len(notes), scope)
     recipient = get_secret(scope, "recipient-email")
     password = get_secret(scope, "smtp-app-password")
-    date_label = datetime.now(LOCAL_TIMEZONE).strftime("%Y-%m-%d")
+    date_label = pub_date.strftime("%Y-%m-%d")
     sorted_notes = sorted(notes, key=lambda item: item.published_utc)
 
     message = EmailMessage()
@@ -353,12 +354,13 @@ def main() -> None:
     from pyspark.sql import SparkSession
 
     spark = SparkSession.builder.getOrCreate()
-    new_notes = load_new_release_notes(spark, args.digest_table, fetch_release_notes(days_ago=1))
+    yesterday = datetime.now(LOCAL_TIMEZONE).date() - timedelta(days=1)
+    new_notes = load_new_release_notes(spark, args.digest_table, fetch_release_notes(pub_date=yesterday))
     if not new_notes:
         LOGGER.info("No new release notes found; skipping email delivery.")
         print("No new Azure Databricks release notes found; no email sent.")
         return
-    send_digest(new_notes, args.secret_scope)
+    send_digest(new_notes, args.secret_scope, pub_date=yesterday)
     save_release_notes(spark, args.digest_table, new_notes)
     LOGGER.info("Databricks digest job completed successfully with %d release notes.", len(new_notes))
     print(f"Sent digest containing {len(new_notes)} release notes.")
