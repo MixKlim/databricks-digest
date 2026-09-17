@@ -1,6 +1,6 @@
 import sys
 import types
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from importlib.util import module_from_spec, spec_from_file_location
 from io import BytesIO
 from unittest.mock import MagicMock, patch
@@ -55,8 +55,8 @@ def test_fetch_release_notes_sorts_and_limits_feed_entries():
     assert notes[0].category == "Platform"
 
 
-def test_fetch_release_notes_filters_to_inclusive_local_date_range():
-    """Verify the lookback window includes its start date and today."""
+def test_fetch_release_notes_filters_to_exact_local_publication_date():
+    """Verify only notes published on the requested local date are returned."""
     feed = MagicMock(
         bozo=False,
         entries=[
@@ -65,19 +65,21 @@ def test_fetch_release_notes_filters_to_inclusive_local_date_range():
             make_entry("today", "Today", 15),
         ],
     )
-    run_time = datetime(2026, 1, 15, 12, tzinfo=UTC)
     with patch.object(databricks_digest, "request_feed", return_value=feed):
-        notes = databricks_digest.fetch_release_notes(days_ago=1, now=run_time)
+        notes = databricks_digest.fetch_release_notes(pub_date=date(2026, 1, 14))
 
-    assert [note.note_id for note in notes] == ["today", "yesterday"]
+    assert [note.note_id for note in notes] == ["yesterday"]
 
 
-def test_fetch_release_notes_rejects_negative_days_ago():
-    """Verify an invalid exact-day window fails before making a network request."""
-    with patch.object(databricks_digest, "request_feed") as request:
-        with pytest.raises(ValueError, match="days_ago must be zero or greater"):
-            databricks_digest.fetch_release_notes(days_ago=-1)
-    request.assert_not_called()
+def test_fetch_release_notes_removes_duplicate_titles_on_same_date():
+    """Verify duplicate feed representations of one release are returned once."""
+    first = make_entry("first", "Same release", 14)
+    duplicate = make_entry("duplicate", "  SAME   RELEASE ", 14)
+    feed = MagicMock(bozo=False, entries=[first, duplicate])
+    with patch.object(databricks_digest, "request_feed", return_value=feed):
+        notes = databricks_digest.fetch_release_notes(pub_date=date(2026, 1, 14))
+
+    assert [note.note_id for note in notes] == ["first"]
 
 
 def test_fetch_release_notes_reports_http_errors():
@@ -252,7 +254,7 @@ def test_send_digest_uses_gmail_secrets_and_escapes_html():
         patch.object(databricks_digest, "get_secret", side_effect=["to@gmail.com", "app-password"]),
         patch.object(databricks_digest.smtplib, "SMTP_SSL", return_value=smtp),
     ):
-        databricks_digest.send_digest([first, second], "release-notes-digest")
+        databricks_digest.send_digest([first, second], "release-notes-digest", pub_date=date(2026, 1, 14))
 
     message = smtp.send_message.call_args.args[0]
     assert message["To"] == "to@gmail.com"
@@ -287,7 +289,7 @@ def test_smoke_test_main_dry_run(capsys):
     with (
         patch.object(smoke_test, "load_dotenv"),
         patch.object(smoke_test, "fetch_release_notes", return_value=[make_note()]),
-        patch.object(sys, "argv", ["smoke_test.py", "--days-ago", "1", "--dry-run"]),
+        patch.object(sys, "argv", ["smoke_test.py", "--pub-date", "2026-09-16", "--dry-run"]),
     ):
         smoke_test.main()
     assert "Dry run complete" in capsys.readouterr().out
@@ -300,7 +302,7 @@ def test_smoke_test_main_sends_email():
         patch.object(smoke_test, "load_dotenv"),
         patch.object(smoke_test, "fetch_release_notes", return_value=[make_note()]),
         patch.object(smoke_test, "send_digest") as send_digest,
-        patch.object(sys, "argv", ["smoke_test.py"]),
+        patch.object(sys, "argv", ["smoke_test.py", "--pub-date", "2026-09-16"]),
     ):
         smoke_test.main()
     send_digest.assert_called_once()
@@ -312,7 +314,7 @@ def test_smoke_test_main_reports_fetch_errors():
     with (
         patch.object(smoke_test, "load_dotenv"),
         patch.object(smoke_test, "fetch_release_notes", side_effect=RuntimeError("invalid")),
-        patch.object(sys, "argv", ["smoke_test.py"]),
+        patch.object(sys, "argv", ["smoke_test.py", "--pub-date", "2026-09-16"]),
     ):
         with pytest.raises(SystemExit) as error:
             smoke_test.main()
@@ -326,7 +328,7 @@ def test_smoke_test_main_skips_empty_email(capsys):
         patch.object(smoke_test, "load_dotenv"),
         patch.object(smoke_test, "fetch_release_notes", return_value=[]),
         patch.object(smoke_test, "send_digest") as send_digest,
-        patch.object(sys, "argv", ["smoke_test.py"]),
+        patch.object(sys, "argv", ["smoke_test.py", "--pub-date", "2026-09-16"]),
     ):
         smoke_test.main()
     send_digest.assert_not_called()
