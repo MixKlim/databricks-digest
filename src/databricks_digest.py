@@ -11,6 +11,7 @@ import re
 import smtplib
 import ssl
 import urllib.error
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
@@ -21,6 +22,8 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 import feedparser
+from google import genai
+from google.genai import types
 
 LOGGER = logging.getLogger("databricks-digest")
 RELEASE_NOTES_FEED_URL = "https://learn.microsoft.com/en-us/azure/databricks/feed.xml"
@@ -202,6 +205,58 @@ def render_summary(summary: str, base_url: str) -> tuple[str, str]:
     return "".join(renderer.html_parts).strip(), readable_text
 
 
+def summarize_digest(
+    items: Sequence[ReleaseNote],
+    client: genai.Client | None = None,
+    secret_scope: str | None = None,
+) -> list[str]:
+    """Summarize each release-note item as one concise, actionable bullet sentence."""
+    if not items:
+        return []
+
+    if client is None:
+        api_key = get_secret(secret_scope, "gemini-api-key") if secret_scope else os.environ["GEMINI_API_KEY"]
+        client = genai.Client(api_key=api_key)
+
+    digest_items = []
+    for item in items:
+        _, readable_summary = render_summary(item.summary, item.url)
+        digest_items.append(f"- [{item.category}] {item.title}: {readable_summary or 'No details provided.'}")
+
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=(
+            "Summarize each of the following Azure Databricks release-note items as exactly one short "
+            "bullet sentence, preserving the input order. Keep the wording professional and "
+            "developer-focused. Prioritize practical impact, migration or compatibility concerns, "
+            "and concrete actions developers should take. Return exactly one line per item, each "
+            "starting with '- '. Do not include category labels or bracketed tags, and do not add "
+            "headings or introductory text.\n\n" + "\n".join(digest_items)
+        ),
+        config=types.GenerateContentConfig(
+            system_instruction="You are a pragmatic technical release-notes analyst.",
+            temperature=0.0,
+            max_output_tokens=1000,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        ),
+    )
+
+    summaries = [
+        re.sub(
+            r"^(?:\[[^\]]+\]\s*)+",
+            "",
+            re.sub(r"^(?:[-*]|\d+[.)])\s*", "", " ".join(line.split())),
+        )
+        for line in (response.text or "").splitlines()
+        if line.strip()
+    ]
+    if not summaries:
+        raise RuntimeError("Gemini returned an empty digest summary.")
+    if len(summaries) != len(items):
+        raise RuntimeError("Gemini returned an unexpected number of digest summaries.")
+    return summaries
+
+
 def load_new_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]) -> list[ReleaseNote]:
     """Create the digest table if needed and exclude already delivered notes."""
     LOGGER.info("Ensuring digest table exists: %s", table_name)
@@ -233,12 +288,19 @@ def send_digest(notes: list[ReleaseNote], scope: str, pub_date: date) -> None:
     password = get_secret(scope, "smtp-app-password")
     date_label = pub_date.strftime("%Y-%m-%d")
     sorted_notes = sorted(notes, key=lambda item: item.published_utc)
+    llm_summaries = None
+    try:
+        llm_summaries = summarize_digest(sorted_notes, secret_scope=scope)
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("LLM digest summary unavailable; continuing without it.", exc_info=True)
 
     message = EmailMessage()
     message["Subject"] = f"Azure Databricks Release Notes | {date_label}"
     message["From"] = recipient
     message["To"] = recipient
     lines = [f"New Azure Databricks release notes: {len(notes)}", ""]
+    if llm_summaries:
+        lines.extend(["LLM summary:", *[f"**- {summary}**" for summary in llm_summaries], ""])
     for note in sorted_notes:
         _, plain_summary = render_summary(note.summary, note.url)
         lines.append(f"[{note.category}] {note.title}")
@@ -276,6 +338,16 @@ def send_digest(notes: list[ReleaseNote], scope: str, pub_date: date) -> None:
             </article>
             """
         )
+    llm_summary_html = (
+        '<section style="background:#eef6fc;border-left:4px solid #0078d4;margin:0 0 20px;padding:16px 18px;">'
+        '<div style="color:#0078d4;font-size:12px;font-weight:700;margin-bottom:7px;">LLM SUMMARY</div>'
+        '<ul style="color:#243b53;font-size:14px;line-height:1.6;margin:0;padding-left:20px;">'
+        + "".join(f"<li><strong>{html.escape(summary)}</strong></li>" for summary in llm_summaries)
+        + "</ul>"
+        "</section>"
+        if llm_summaries
+        else ""
+    )
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -303,7 +375,8 @@ def send_digest(notes: list[ReleaseNote], scope: str, pub_date: date) -> None:
               {html.escape(date_label)} &middot; {len(notes)} new release notes
             </p>
           </header>
-          {"".join(cards)}
+                    {llm_summary_html}
+                    {"".join(cards)}
                     <footer style="border-top:1px solid #d9e2ec;color:#627d98;font-size:12px;
                                    line-height:1.5;padding:16px 4px 4px;text-align:center;">
                         Curated from the official Microsoft Learn Azure Databricks documentation feed
