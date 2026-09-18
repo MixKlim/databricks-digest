@@ -11,6 +11,7 @@ Scheduled Databricks Asset Bundle that reads the official [Azure Databricks rele
 2. Create a Databricks secret scope named `databricks-digest` and add these keys:
    - `recipient-email`: the Gmail address used to send and receive the digest.
    - `smtp-app-password`: a Gmail app password, not the normal account password.
+   - `gemini-api-key`: the Gemini API key used for the optional LLM digest summary.
 3. Install the Databricks CLI and authenticate to the workspace.
 4. Authenticate with the configured Databricks CLI profile and deploy:
 
@@ -49,6 +50,12 @@ uv run python scripts/smoke_test.py --pub-date 2026-01-01
 ```text
 make test
 ```
+
+### LLM digest summary
+
+The `summarize_digest` function in `src/databricks_digest.py` uses Gemini LLM to turn each release note into one short, professional, developer-focused bullet sentence. It emphasizes practical impact, compatibility or migration concerns, and concrete actions. The function is optional and does not change email delivery or the Delta state table.
+
+For the Databricks job, store the key in the configured secret scope as `gemini-api-key`. The job reads it with Databricks Secrets and never places the key in bundle configuration or email content. Local runs can use `GEMINI_API_KEY` in `.env` instead. The deployed job installs the `google-genai` dependency automatically; if Gemini is unavailable, the email is still sent without the LLM summary.
 
 ### Full Databricks test
 

@@ -193,6 +193,86 @@ def test_render_summary_removes_external_links():
     assert rendered_text == "Read the note."
 
 
+def test_summarize_digest_builds_one_bullet_per_item_prompt():
+    """Verify each digest item produces one concise actionable bullet."""
+    client = MagicMock()
+    client.models.generate_content.return_value.text = "- Check runtime compatibility."
+
+    summary = databricks_digest.summarize_digest([make_note()], client=client)
+
+    assert summary == ["Check runtime compatibility."]
+    request = client.models.generate_content.call_args.kwargs
+    assert request["model"] == "gemini-3.5-flash-lite"
+    assert "one short bullet sentence" in request["contents"]
+    assert "Databricks announcement" in request["contents"]
+    assert "Do not include category labels or bracketed tags" in request["contents"]
+
+
+def test_summarize_digest_removes_model_category_tags():
+    """Verify model-generated category tags are removed from bullet sentences."""
+    client = MagicMock()
+    client.models.generate_content.return_value.text = "- [aibi, dashboards] Update dashboards with local metric views."
+
+    summary = databricks_digest.summarize_digest([make_note()], client=client)
+
+    assert summary == ["Update dashboards with local metric views."]
+
+
+def test_summarize_digest_handles_empty_items():
+    """Verify no model request is made for an empty digest."""
+    client = MagicMock()
+
+    assert databricks_digest.summarize_digest([], client=client) == []
+    client.models.generate_content.assert_not_called()
+
+
+def test_summarize_digest_creates_gemini_client_from_environment(monkeypatch):
+    """Verify the summarizer can create its default Gemini client."""
+    client = MagicMock()
+    client.models.generate_content.return_value.text = "Use the new API."
+    gemini = MagicMock()
+    gemini.Client.return_value = client
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    with patch.object(databricks_digest.genai, "Client", gemini.Client):
+        assert databricks_digest.summarize_digest([make_note()]) == ["Use the new API."]
+    gemini.Client.assert_called_once_with(api_key="test-key")
+
+
+def test_summarize_digest_reads_gemini_key_from_databricks_secret():
+    """Verify the summarizer uses the configured secret scope in a job."""
+    client = MagicMock()
+    client.models.generate_content.return_value.text = "Use the new API."
+    gemini = MagicMock()
+    gemini.Client.return_value = client
+    with (
+        patch.object(databricks_digest, "get_secret", return_value="secret-key") as get_secret,
+        patch.object(databricks_digest.genai, "Client", gemini.Client),
+    ):
+        assert databricks_digest.summarize_digest([make_note()], secret_scope="databricks-digest") == [
+            "Use the new API."
+        ]
+    get_secret.assert_called_once_with("databricks-digest", "gemini-api-key")
+    gemini.Client.assert_called_once_with(api_key="secret-key")
+
+
+def test_summarize_digest_rejects_empty_model_response():
+    """Verify empty model output is reported instead of silently delivered."""
+    client = MagicMock()
+    client.models.generate_content.return_value.text = ""
+
+    with pytest.raises(RuntimeError, match="empty digest summary"):
+        databricks_digest.summarize_digest([make_note()], client=client)
+
+
+def test_summarize_digest_rejects_wrong_item_count():
+    """Verify one missing bullet fails closed instead of mislabeling items."""
+    client = MagicMock()
+    client.models.generate_content.return_value.text = "- Use the new API."
+
+    with pytest.raises(RuntimeError, match="unexpected number"):
+        databricks_digest.summarize_digest([make_note("one"), make_note("two")], client=client)
+
+
 def test_summary_renderer_ignores_nested_script_state():
     """Verify nested ignored tags cannot leak markup or script text into email."""
     renderer = databricks_digest.SummaryRenderer(databricks_digest.RELEASE_NOTES_FEED_URL)
@@ -252,6 +332,11 @@ def test_send_digest_uses_gmail_secrets_and_escapes_html():
     smtp.__enter__.return_value = smtp
     with (
         patch.object(databricks_digest, "get_secret", side_effect=["to@gmail.com", "app-password"]),
+        patch.object(
+            databricks_digest,
+            "summarize_digest",
+            return_value=["Review the updated APIs.", "Update clients."],
+        ),
         patch.object(databricks_digest.smtplib, "SMTP_SSL", return_value=smtp),
     ):
         databricks_digest.send_digest([first, second], "release-notes-digest", pub_date=date(2026, 1, 14))
@@ -261,11 +346,32 @@ def test_send_digest_uses_gmail_secrets_and_escapes_html():
     assert "Azure Databricks Release Notes" in message["Subject"]
     plain_content = message.get_body(preferencelist=("plain",)).get_content()
     html_content = message.get_body(preferencelist=("html",)).get_content()
+    assert "**- Review the updated APIs.**" in plain_content
+    assert "**- Update clients.**" in plain_content
+    assert "<li><strong>Review the updated APIs.</strong></li>" in html_content
+    assert "<li><strong>Update clients.</strong></li>" in html_content
     assert plain_content.index("second") < plain_content.index("first")
     assert "&lt;Important&gt;" in html_content
     assert databricks_digest.MICROSOFT_LOGO_URL in html_content
     assert databricks_digest.DATABRICKS_LOGO_URL in html_content
     smtp.login.assert_called_once_with("to@gmail.com", "app-password")
+
+
+def test_send_digest_sends_items_when_llm_summary_fails():
+    """Verify LLM failures do not prevent the release-note email from sending."""
+    smtp = MagicMock()
+    smtp.__enter__.return_value = smtp
+    with (
+        patch.object(databricks_digest, "get_secret", side_effect=["to@gmail.com", "app-password"]),
+        patch.object(databricks_digest, "summarize_digest", side_effect=RuntimeError("model unavailable")),
+        patch.object(databricks_digest.smtplib, "SMTP_SSL", return_value=smtp),
+    ):
+        databricks_digest.send_digest([make_note()], "release-notes-digest", pub_date=date(2026, 1, 14))
+
+    message = smtp.send_message.call_args.args[0]
+    plain_content = message.get_body(preferencelist=("plain",)).get_content()
+    assert "Databricks announcement" in plain_content
+    assert "LLM summary:" not in plain_content
 
 
 def test_save_release_notes_skips_empty_input():
