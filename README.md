@@ -74,6 +74,7 @@ Configure the `production` environment with:
 
 - Repository/environment variable `DATABRICKS_HOST`.
 - Repository/environment secret `DATABRICKS_TOKEN` for the Databricks service principal.
+- Repository/environment secret `DATABRICKS_PRINCIPAL_NAME` for the Databricks service principal.
 
 The workflow validates on pull requests and deploys the `prod` bundle after a push to `main`.
 
