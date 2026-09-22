@@ -16,7 +16,7 @@ Scheduled Databricks Asset Bundle that reads the official [Azure Databricks rele
 4. Authenticate with the configured Databricks CLI profile and deploy:
 
    ```text
-   databricks bundle deploy -t dev -p mixklim
+   databricks bundle deploy -t dev -p <DATABRICKS_PROFILE>
    ```
 
 The job runs daily at 08:00 CET/CEST using the `Europe/Amsterdam` timezone and stores processed release-note IDs in `<catalog>.<schema>.databricks_release_notes`. It sends no email when there are no new feed items.
@@ -62,8 +62,8 @@ For the Databricks job, store the key in the configured secret scope as `gemini-
 To test the actual Spark/Delta watermark and secret-scope path, deploy the development target and start the job manually:
 
 ```powershell
-databricks bundle deploy -t dev -p mixklim
-databricks bundle run -t dev -p mixklim databricks_digest
+databricks bundle deploy -t dev -p <DATABRICKS_PROFILE>
+databricks bundle run -t dev -p <DATABRICKS_PROFILE> databricks_digest
 ```
 
 Check the run output and the recipient inbox. A second run with no new release notes should report `No new Azure Databricks release notes found; no email sent.`
