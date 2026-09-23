@@ -68,7 +68,7 @@ To test the actual Spark/Delta watermark and secret-scope path, deploy the devel
 
 ```powershell
 databricks bundle deploy -t dev -p <DATABRICKS_PROFILE>
-databricks bundle run -t dev -p <DATABRICKS_PROFILE> databricks_digest
+databricks bundle run -t dev -p <DATABRICKS_PROFILE> databricks_digest_email
 ```
 
 Check the run output and the recipient inbox. A second run with no new release notes should report `No new Azure Databricks release notes found; no email sent.`
