@@ -66,15 +66,21 @@ def get_secret(scope: str, key: str) -> str:
 
 def fetch_release_notes(
     limit: int | None = None,
-    pub_date: date | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[ReleaseNote]:
-    """Fetch release notes, optionally limited to one local publication date."""
+    """Fetch release notes, optionally limited to a local publication date range."""
     if limit is not None and limit < 1:
         return []
+    if end_date is not None and start_date is None:
+        raise ValueError("start_date is required when end_date is provided.")
+    if start_date is not None and end_date is not None and end_date < start_date:
+        raise ValueError("end_date cannot be earlier than start_date.")
     LOGGER.info(
-        "Fetching release notes from Microsoft Learn feed (limit=%s, pub_date=%s).",
+        "Fetching release notes from Microsoft Learn feed (limit=%s, start_date=%s, end_date=%s).",
         limit,
-        pub_date,
+        start_date,
+        end_date,
     )
     try:
         feed = request_feed(RELEASE_NOTES_FEED_URL)
@@ -85,11 +91,13 @@ def fetch_release_notes(
 
     notes = [parse_feed_entry(entry) for entry in feed.entries]
     LOGGER.info("Parsed %d release notes from Microsoft Learn feed.", len(notes))
-    if pub_date is not None:
-        notes = [note for note in notes if release_date(note) == pub_date]
+    if start_date is not None:
+        range_end = end_date or start_date
+        notes = [note for note in notes if start_date <= release_date(note) <= range_end]
         LOGGER.info(
-            "Filtered release notes to local publication date %s: %d notes.",
-            pub_date,
+            "Filtered release notes to local publication date range %s through %s: %d notes.",
+            start_date,
+            range_end,
             len(notes),
         )
     unique_notes: dict[tuple[date, str], ReleaseNote] = {}
@@ -428,7 +436,7 @@ def main() -> None:
 
     spark = SparkSession.builder.getOrCreate()
     yesterday = datetime.now(LOCAL_TIMEZONE).date() - timedelta(days=1)
-    new_notes = load_new_release_notes(spark, args.digest_table, fetch_release_notes(pub_date=yesterday))
+    new_notes = load_new_release_notes(spark, args.digest_table, fetch_release_notes(start_date=yesterday))
     if not new_notes:
         LOGGER.info("No new release notes found; skipping email delivery.")
         print("No new Azure Databricks release notes found; no email sent.")
