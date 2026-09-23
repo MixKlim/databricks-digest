@@ -71,6 +71,15 @@ def test_fetch_release_notes_filters_to_single_local_publication_date():
     assert [note.note_id for note in notes] == ["yesterday"]
 
 
+def test_fetch_release_notes_includes_future_publication_dates():
+    """Verify feed discovery does not wait for a future publication date."""
+    feed = MagicMock(bozo=False, entries=[make_entry("future", "Future", 25)])
+    with patch.object(databricks_digest, "request_feed", return_value=feed):
+        notes = databricks_digest.fetch_release_notes(start_date=date(2026, 1, 23), end_date=date(2026, 1, 25))
+
+    assert [note.note_id for note in notes] == ["future"]
+
+
 def test_fetch_release_notes_filters_to_inclusive_local_publication_date_range():
     """Verify both endpoints of a requested local publication date range are included."""
     feed = MagicMock(
@@ -350,6 +359,57 @@ def test_load_new_release_notes_excludes_processed_ids():
     spark.sql.assert_any_call("SELECT note_id FROM catalog.schema.notes")
 
 
+def test_capture_release_notes_merges_by_stable_feed_id():
+    """Verify discovery persists feed metadata with an idempotent merge key."""
+    spark = MagicMock()
+    databricks_digest.capture_release_notes(spark, "catalog.schema.notes", [make_note("future")])
+
+    spark.createDataFrame.assert_called_once_with(
+        [
+            (
+                "future",
+                "Databricks announcement",
+                "https://learn.microsoft.com/en-us/azure/databricks/release-notes/future",
+                "Azure Databricks",
+                1_700_000_000,
+                "A release note summary.",
+            )
+        ],
+        ["note_id", "title", "note_url", "category", "published_utc", "summary"],
+    )
+    assert "WHEN MATCHED THEN UPDATE SET" in spark.sql.call_args.args[0]
+    assert "WHEN NOT MATCHED THEN INSERT" in spark.sql.call_args.args[0]
+
+
+def test_load_pending_release_notes_maps_unprocessed_rows():
+    """Verify pending captured rows are converted back to release notes."""
+    spark = MagicMock()
+    spark.sql.return_value.collect.return_value = [
+        MagicMock(
+            note_id="future",
+            title="Future",
+            note_url="https://learn.microsoft.com/en-us/azure/databricks/release-notes/future",
+            category="Platform",
+            published_utc=1_700_000_000,
+            summary="Summary",
+        )
+    ]
+
+    notes = databricks_digest.load_pending_release_notes(spark, "catalog.schema.notes")
+
+    assert notes == [
+        databricks_digest.ReleaseNote(
+            note_id="future",
+            title="Future",
+            url="https://learn.microsoft.com/en-us/azure/databricks/release-notes/future",
+            category="Platform",
+            published_utc=1_700_000_000,
+            summary="Summary",
+        )
+    ]
+    assert "WHERE processed_at IS NULL" in spark.sql.call_args.args[0]
+
+
 def test_send_digest_uses_gmail_secrets_and_escapes_html():
     """Verify delivery uses secrets, chronological ordering, and escaped HTML."""
     first = make_note("first", 2)
@@ -413,7 +473,8 @@ def test_save_release_notes_merges_rows():
     spark = MagicMock()
     databricks_digest.save_release_notes(spark, "catalog.schema.notes", [make_note()])
     spark.createDataFrame.assert_called_once()
-    spark.createDataFrame.return_value.createOrReplaceTempView.assert_called_once_with("new_release_notes")
+    spark.createDataFrame.return_value.createOrReplaceTempView.assert_called_once_with("delivered_release_notes")
+    assert "WHEN MATCHED THEN UPDATE SET processed_at" in spark.sql.call_args.args[0]
 
 
 def test_smoke_test_main_dry_run(capsys):
@@ -489,6 +550,28 @@ def test_databricks_main_handles_empty_run(monkeypatch):
     databricks_digest.main()
 
 
+def test_databricks_main_capture_mode_persists_discovered_notes(monkeypatch, capsys):
+    """Verify capture mode records feed items without attempting email delivery."""
+    spark = MagicMock()
+    spark_module = types.ModuleType("pyspark.sql")
+    spark_module.SparkSession = MagicMock(builder=MagicMock(getOrCreate=MagicMock(return_value=spark)))
+    monkeypatch.setitem(sys.modules, "pyspark.sql", spark_module)
+    notes = [make_note()]
+    monkeypatch.setattr(databricks_digest, "fetch_release_notes", lambda: notes)
+    capture = MagicMock()
+    monkeypatch.setattr(databricks_digest, "capture_release_notes", capture)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["databricks_digest.py", "--digest-table", "table", "--secret-scope", "scope", "--mode", "capture"],
+    )
+
+    databricks_digest.main()
+
+    capture.assert_called_once_with(spark, "table", notes)
+    assert "Captured 1 release notes." in capsys.readouterr().out
+
+
 def test_databricks_main_sends_and_saves(monkeypatch):
     """Verify the Databricks entry point delivers and persists new notes."""
     spark = MagicMock()
@@ -497,7 +580,8 @@ def test_databricks_main_sends_and_saves(monkeypatch):
     monkeypatch.setitem(sys.modules, "pyspark.sql", spark_module)
     notes = [make_note()]
     monkeypatch.setattr(databricks_digest, "fetch_release_notes", lambda **_: notes)
-    monkeypatch.setattr(databricks_digest, "load_new_release_notes", lambda *_: notes)
+    monkeypatch.setattr(databricks_digest, "capture_release_notes", MagicMock())
+    monkeypatch.setattr(databricks_digest, "load_pending_release_notes", lambda *_: notes)
     monkeypatch.setattr(databricks_digest, "send_digest", MagicMock())
     monkeypatch.setattr(databricks_digest, "save_release_notes", MagicMock())
     monkeypatch.setattr(sys, "argv", ["databricks_digest.py", "--digest-table", "table", "--secret-scope", "scope"])

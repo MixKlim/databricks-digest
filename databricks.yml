@@ -26,7 +26,10 @@ targets:
       host: https://dbc-b8858560-a152.cloud.databricks.com
     resources:
       jobs:
-        databricks_digest:
+        databricks_digest_capture:
+          schedule:
+            pause_status: PAUSED
+        databricks_digest_email:
           schedule:
             pause_status: PAUSED
 
@@ -37,6 +40,9 @@ targets:
       root_path: /Workspace/Users/${var.principal_name}/.bundle/${bundle.name}/${bundle.target}
     resources:
       jobs:
-        databricks_digest:
+        databricks_digest_capture:
+          schedule:
+            pause_status: UNPAUSED
+        databricks_digest_email:
           schedule:
             pause_status: UNPAUSED

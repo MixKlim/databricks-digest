@@ -19,9 +19,14 @@ Scheduled Databricks Asset Bundle that reads the official [Azure Databricks rele
    databricks bundle deploy -t dev -p <DATABRICKS_PROFILE>
    ```
 
-The job runs daily at 08:00 CET/CEST using the `Europe/Amsterdam` timezone and stores processed release-note IDs in `<catalog>.<schema>.databricks_release_notes`. It sends no email when there are no new feed items.
+The production bundle runs two jobs using the `Europe/Amsterdam` timezone:
 
-The feed client uses the fixed Microsoft Learn HTTPS endpoint, a bounded 30-second timeout, a descriptive user agent, and validates every returned link before including it in email. The Delta state table makes delivery idempotent across daily runs and feed refreshes.
+- `databricks-digest-capture` polls the feed every 15 minutes and captures every item currently returned by Microsoft Learn, including items whose `pubDate` is in the future.
+- `databricks-digest-email` runs daily at 08:00 and emails captured items that have not yet been delivered.
+
+Both jobs use `<catalog>.<schema>.databricks_release_notes`. The table records the feed publication time, the first and most recent observation times, and the delivery timestamp. Feed `pubDate` is not used as a delivery gate, so future-dated items are eligible as soon as they appear. Repeated polls are idempotent by feed item ID, and failed email delivery leaves items pending for the next digest. The feed only retains a finite set of items, so fetch failures are still reported through Databricks job notifications.
+
+The feed client uses the fixed Microsoft Learn HTTPS endpoint, a bounded 30-second timeout, a descriptive user agent, and validates every returned link before capturing it. The Delta capture table makes polling idempotent across runs and feed refreshes.
 
 ## Local checks
 
