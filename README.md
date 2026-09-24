@@ -19,12 +19,9 @@ Scheduled Databricks Asset Bundle that reads the official [Azure Databricks rele
    databricks bundle deploy -t dev -p <DATABRICKS_PROFILE>
    ```
 
-The production bundle runs two jobs using the `Europe/Amsterdam` timezone:
+The production bundle runs one job, `databricks-digest`, daily at 08:00 using the `Europe/Amsterdam` timezone. Each run fetches every item currently returned by Microsoft Docs RSS Feed, merges the items into the Delta table, and emails items that have not yet been delivered.
 
-- `databricks-digest-capture` polls the feed every 15 minutes and captures every item currently returned by Microsoft Learn, including items whose `pubDate` is in the future.
-- `databricks-digest-email` runs daily at 08:00 and emails captured items that have not yet been delivered.
-
-Both jobs use `<catalog>.<schema>.databricks_release_notes`. The table records the feed publication time, the first and most recent observation times, and the delivery timestamp. Feed `pubDate` is not used as a delivery gate, so future-dated items are eligible as soon as they appear. Repeated polls are idempotent by feed item ID, and failed email delivery leaves items pending for the next digest. The feed only retains a finite set of items, so fetch failures are still reported through Databricks job notifications.
+The job uses `<catalog>.<schema>.databricks_release_notes`. The table records the feed publication time, the first and most recent observation times, and the delivery timestamp. Feed `pubDate` is not used as a delivery gate, so future-dated items are eligible as soon as they appear. Repeated polls are idempotent by feed item ID, and failed email delivery leaves items pending for the next digest. The feed only retains a finite set of items, so fetch failures are still reported through Databricks job notifications.
 
 The feed client uses the fixed Microsoft Learn HTTPS endpoint, a bounded 30-second timeout, a descriptive user agent, and validates every returned link before capturing it. The Delta capture table makes polling idempotent across runs and feed refreshes.
 
@@ -38,7 +35,7 @@ uv run pre-commit run --all-files
 uv run pytest
 ```
 
-### Local email smoke test
+### Local email local digest
 
 This fetches real release notes from Microsoft Learn and can send the matching window through Gmail without requiring PySpark. Use a Gmail app password, not your normal Gmail password. Copy `.env.example` to `.env`, fill in the values, then run:
 
@@ -46,8 +43,8 @@ This fetches real release notes from Microsoft Learn and can send the matching w
 Copy-Item .env.example .env
 # Edit .env and replace the placeholder values.
 uv sync --dev
-uv run python scripts/smoke_test.py --start-date 2026-01-01 --dry-run
-uv run python scripts/smoke_test.py --start-date 2026-01-01 --end-date 2026-01-05
+uv run python scripts/local_digest.py --start-date 2026-09-01 --dry-run
+uv run python scripts/local_digest.py --start-date 2026-09-01 --end-date 2026-09-05
 ```
 
 `--start-date` selects the first local publication date in `YYYY-MM-DD` format. `--end-date` is optional; when provided, notes published through that date are included. Without it, only the start date is selected. The first command prints matching notes without sending mail. The second sends the matching notes and does not update the Delta state table. The email uses inline styling and text-based Microsoft Learn/Databricks brand lockups so it remains presentable when mail clients block external images. Unit tests cover feed parsing, date filtering, URL validation, state deduplication, and email composition:
@@ -64,11 +61,11 @@ For the Databricks job, store the key in the configured secret scope as `gemini-
 
 ### Full Databricks test
 
-To test the actual Spark/Delta watermark and secret-scope path, deploy the development target and start the job manually:
+To test the actual Spark/Delta merge and secret-scope path, deploy the development target and start the job manually:
 
 ```powershell
 databricks bundle deploy -t dev -p <DATABRICKS_PROFILE>
-databricks bundle run -t dev -p <DATABRICKS_PROFILE> databricks_digest_email
+databricks bundle run -t dev -p <DATABRICKS_PROFILE> databricks_digest
 ```
 
 Check the run output and the recipient inbox. A second run with no new release notes should report `No new Azure Databricks release notes found; no email sent.`

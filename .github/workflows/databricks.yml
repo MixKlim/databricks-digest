@@ -101,4 +101,4 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           BUNDLE_VAR_principal_name: ${{ secrets.DATABRICKS_PRINCIPAL_NAME }}
           DATABRICKS_BUNDLE_TARGET: prod
-        run: databricks bundle run databricks_digest_email --refresh-all --no-wait
+        run: databricks bundle run databricks_digest --refresh-all --no-wait

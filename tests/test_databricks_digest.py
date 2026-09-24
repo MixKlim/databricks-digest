@@ -12,9 +12,9 @@ import pytest
 from src import databricks_digest
 
 
-def load_smoke_test():
-    """Load the smoke-test script as a module for integration-style tests."""
-    spec = spec_from_file_location("smoke_test", "scripts/smoke_test.py")
+def load_local_digest():
+    """Load the local-digest script as a module for integration-style tests."""
+    spec = spec_from_file_location("local_digest", "scripts/local_digest.py")
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -477,32 +477,32 @@ def test_save_release_notes_merges_rows():
     assert "WHEN MATCHED THEN UPDATE SET processed_at" in spark.sql.call_args.args[0]
 
 
-def test_smoke_test_main_dry_run(capsys):
-    """Verify the smoke-test dry-run path does not send email."""
-    smoke_test = load_smoke_test()
+def test_local_digest_main_dry_run(capsys):
+    """Verify the local-digest dry-run path does not send email."""
+    local_digest = load_local_digest()
     with (
-        patch.object(smoke_test, "load_dotenv"),
-        patch.object(smoke_test, "fetch_release_notes", return_value=[make_note()]),
-        patch.object(sys, "argv", ["smoke_test.py", "--start-date", "2026-09-16", "--dry-run"]),
+        patch.object(local_digest, "load_dotenv"),
+        patch.object(local_digest, "fetch_release_notes", return_value=[make_note()]),
+        patch.object(sys, "argv", ["local_digest.py", "--start-date", "2026-09-16", "--dry-run"]),
     ):
-        smoke_test.main()
+        local_digest.main()
     assert "Dry run complete" in capsys.readouterr().out
 
 
-def test_smoke_test_main_sends_email():
-    """Verify the smoke test sends the representative release note."""
-    smoke_test = load_smoke_test()
+def test_local_digest_main_sends_email():
+    """Verify the local digest sends the representative release note."""
+    local_digest = load_local_digest()
     with (
-        patch.object(smoke_test, "load_dotenv"),
-        patch.object(smoke_test, "fetch_release_notes", return_value=[make_note()]) as fetch_notes,
-        patch.object(smoke_test, "send_digest") as send_digest,
+        patch.object(local_digest, "load_dotenv"),
+        patch.object(local_digest, "fetch_release_notes", return_value=[make_note()]) as fetch_notes,
+        patch.object(local_digest, "send_digest") as send_digest,
         patch.object(
             sys,
             "argv",
-            ["smoke_test.py", "--start-date", "2026-09-16", "--end-date", "2026-09-18"],
+            ["local_digest.py", "--start-date", "2026-09-16", "--end-date", "2026-09-18"],
         ),
     ):
-        smoke_test.main()
+        local_digest.main()
     fetch_notes.assert_called_once_with(
         limit=None,
         start_date=date(2026, 9, 16),
@@ -511,29 +511,29 @@ def test_smoke_test_main_sends_email():
     send_digest.assert_called_once()
 
 
-def test_smoke_test_main_reports_fetch_errors():
-    """Verify smoke-test fetch errors are reported through argparse."""
-    smoke_test = load_smoke_test()
+def test_local_digest_main_reports_fetch_errors():
+    """Verify local-digest fetch errors are reported through argparse."""
+    local_digest = load_local_digest()
     with (
-        patch.object(smoke_test, "load_dotenv"),
-        patch.object(smoke_test, "fetch_release_notes", side_effect=RuntimeError("invalid")),
-        patch.object(sys, "argv", ["smoke_test.py", "--start-date", "2026-09-16"]),
+        patch.object(local_digest, "load_dotenv"),
+        patch.object(local_digest, "fetch_release_notes", side_effect=RuntimeError("invalid")),
+        patch.object(sys, "argv", ["local_digest.py", "--start-date", "2026-09-16"]),
     ):
         with pytest.raises(SystemExit) as error:
-            smoke_test.main()
+            local_digest.main()
     assert error.value.code == 1
 
 
-def test_smoke_test_main_skips_empty_email(capsys):
+def test_local_digest_main_skips_empty_email(capsys):
     """Verify an empty date window does not attempt email delivery."""
-    smoke_test = load_smoke_test()
+    local_digest = load_local_digest()
     with (
-        patch.object(smoke_test, "load_dotenv"),
-        patch.object(smoke_test, "fetch_release_notes", return_value=[]),
-        patch.object(smoke_test, "send_digest") as send_digest,
-        patch.object(sys, "argv", ["smoke_test.py", "--start-date", "2026-09-16"]),
+        patch.object(local_digest, "load_dotenv"),
+        patch.object(local_digest, "fetch_release_notes", return_value=[]),
+        patch.object(local_digest, "send_digest") as send_digest,
+        patch.object(sys, "argv", ["local_digest.py", "--start-date", "2026-09-16"]),
     ):
-        smoke_test.main()
+        local_digest.main()
     send_digest.assert_not_called()
     assert "no email sent" in capsys.readouterr().out
 
@@ -548,28 +548,6 @@ def test_databricks_main_handles_empty_run(monkeypatch):
     monkeypatch.setattr(databricks_digest, "load_new_release_notes", lambda *_: [])
     monkeypatch.setattr(sys, "argv", ["databricks_digest.py", "--digest-table", "table", "--secret-scope", "scope"])
     databricks_digest.main()
-
-
-def test_databricks_main_capture_mode_persists_discovered_notes(monkeypatch, capsys):
-    """Verify capture mode records feed items without attempting email delivery."""
-    spark = MagicMock()
-    spark_module = types.ModuleType("pyspark.sql")
-    spark_module.SparkSession = MagicMock(builder=MagicMock(getOrCreate=MagicMock(return_value=spark)))
-    monkeypatch.setitem(sys.modules, "pyspark.sql", spark_module)
-    notes = [make_note()]
-    monkeypatch.setattr(databricks_digest, "fetch_release_notes", lambda: notes)
-    capture = MagicMock()
-    monkeypatch.setattr(databricks_digest, "capture_release_notes", capture)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["databricks_digest.py", "--digest-table", "table", "--secret-scope", "scope", "--mode", "capture"],
-    )
-
-    databricks_digest.main()
-
-    capture.assert_called_once_with(spark, "table", notes)
-    assert "Captured 1 release notes." in capsys.readouterr().out
 
 
 def test_databricks_main_sends_and_saves(monkeypatch):

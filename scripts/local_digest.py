@@ -1,4 +1,4 @@
-"""Run a local release-notes digest and optional Gmail delivery smoke test."""
+"""Run a local release-notes digest and optional Gmail delivery local digest."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def main() -> None:
     try:
         notes = fetch_release_notes(limit=args.limit, start_date=args.start_date, end_date=args.end_date)
     except (RuntimeError, ValueError) as error:
-        parser.exit(1, f"Smoke test could not fetch release notes: {error}\n")
+        parser.exit(1, f"local digest could not fetch release notes: {error}\n")
     range_end = args.end_date or args.start_date
     print(
         f"Found {len(notes)} release notes published from {args.start_date.isoformat()} "

@@ -1,49 +1,11 @@
 resources:
   jobs:
-    databricks_digest_capture:
-      name: databricks-digest-capture
-      description: Capture all currently visible Azure Databricks release notes.
-      schedule:
-        quartz_cron_expression: 0 0/15 * * * ?
-        timezone_id: Europe/Amsterdam
+    databricks_digest:
+      name: databricks-digest
+      description: Fetch Azure Databricks release notes, reconcile them with Delta state, and email new items.
       max_concurrent_runs: 1
-      email_notifications:
-        on_failure:
-          - mixklim@gmail.com
-      parameters:
-        - name: digest_table
-          default: ${var.catalog}.${var.schema}.databricks_release_notes
-        - name: secret_scope
-          default: ${var.secret_scope}
-      tasks:
-        - task_key: capture_release_notes
-          spark_python_task:
-            python_file: ../src/databricks_digest.py
-            source: WORKSPACE
-            parameters:
-              - --digest-table
-              - "{{job.parameters.digest_table}}"
-              - --secret-scope
-              - "{{job.parameters.secret_scope}}"
-              - --mode
-              - capture
-          environment_key: default
-      environments:
-        - environment_key: default
-          spec:
-            environment_version: "5"
-            dependencies:
-              - feedparser>=6.0
-              - google-genai>=2.24.0
-              - tzdata>=2024.1
-
-    databricks_digest_email:
-      name: databricks-digest-email
-      description: Reconcile captured Azure Databricks release notes and email a daily digest.
-      schedule:
-        quartz_cron_expression: 0 0 8 * * ?
-        timezone_id: Europe/Amsterdam
-      max_concurrent_runs: 1
+      tags:
+        mode: ${bundle.target}
       email_notifications:
         on_failure:
           - mixklim@gmail.com
@@ -62,8 +24,6 @@ resources:
               - "{{job.parameters.digest_table}}"
               - --secret-scope
               - "{{job.parameters.secret_scope}}"
-              - --mode
-              - digest
           environment_key: default
       environments:
         - environment_key: default

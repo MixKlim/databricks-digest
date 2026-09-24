@@ -282,7 +282,7 @@ def ensure_release_notes_table(spark: Any, table_name: str) -> None:
         ) USING DELTA"""
     )
     spark.sql(
-        f"""ALTER TABLE {table_name} ADD COLUMNS IF NOT EXISTS (
+        f"""ALTER TABLE {table_name} ADD COLUMNS (
             summary STRING,
             first_seen_at TIMESTAMP,
             last_seen_at TIMESTAMP
@@ -497,7 +497,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--digest-table", required=True)
     parser.add_argument("--secret-scope", required=True)
-    parser.add_argument("--mode", choices=("capture", "digest"), default="digest")
     args = parser.parse_args()
     LOGGER.info("Starting Databricks digest job for table %s.", args.digest_table)
 
@@ -506,11 +505,6 @@ def main() -> None:
     spark = SparkSession.builder.getOrCreate()
     discovered_notes = fetch_release_notes()
     capture_release_notes(spark, args.digest_table, discovered_notes)
-    if args.mode == "capture":
-        LOGGER.info("Capture run completed with %d discovered release notes.", len(discovered_notes))
-        print(f"Captured {len(discovered_notes)} release notes.")
-        return
-
     pending_notes = load_pending_release_notes(spark, args.digest_table)
     if not pending_notes:
         LOGGER.info("No new release notes found; skipping email delivery.")
