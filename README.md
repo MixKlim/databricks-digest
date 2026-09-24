@@ -3,6 +3,8 @@
 [![CI/CD](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks.yml/badge.svg)](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks.yml)
 [![Coverage Status](https://raw.githubusercontent.com/mixklim/databricks-digest/main/reports/coverage/coverage-badge.svg?dummy=8484744)](https://raw.githubusercontent.com/mixklim/databricks-digest/main/reports/coverage/index.html)
 
+<img src="./media/sample_email.png" alt="Sample email digest" width="75%">
+
 Scheduled Databricks Asset Bundle that reads the official [Azure Databricks release-notes RSS feed](https://learn.microsoft.com/en-us/azure/databricks/feed.xml) and sends cutting edge release notes via email. Microsoft documents this feed on the [Azure Databricks release-notes page](https://learn.microsoft.com/en-us/azure/databricks/release-notes/).
 
 ## Databricks setup
