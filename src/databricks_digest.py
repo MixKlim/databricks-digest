@@ -281,13 +281,6 @@ def ensure_release_notes_table(spark: Any, table_name: str) -> None:
             processed_at TIMESTAMP
         ) USING DELTA"""
     )
-    spark.sql(
-        f"""ALTER TABLE {table_name} ADD COLUMNS (
-            summary STRING,
-            first_seen_at TIMESTAMP,
-            last_seen_at TIMESTAMP
-        )"""
-    )
 
 
 def capture_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]) -> None:
