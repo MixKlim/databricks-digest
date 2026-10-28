@@ -9,14 +9,16 @@ import logging
 import os
 import re
 import smtplib
+import sqlite3
 import ssl
 import urllib.error
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from email.message import EmailMessage
 from html.parser import HTMLParser
-from typing import Any
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
@@ -46,22 +48,13 @@ class ReleaseNote:
 
 
 def get_secret(scope: str, key: str) -> str:
-    """Read a Databricks secret, with env vars available for local tests."""
+    """Read a secret from the process environment."""
     environment_key = key.upper().replace("-", "_")
     environment_value = os.getenv(environment_key)
     if environment_value:
         return environment_value
 
-    dbutils = globals().get("dbutils")
-    if dbutils is None:
-        try:
-            from databricks.sdk.runtime import dbutils as runtime_dbutils
-        except ImportError:
-            runtime_dbutils = None
-        dbutils = runtime_dbutils
-    if dbutils is None:
-        raise RuntimeError(f"Missing secret {key}; set {environment_key} locally or use Databricks secrets.")
-    return dbutils.secrets.get(scope=scope, key=key)
+    raise RuntimeError(f"Missing required environment variable: {environment_key}")
 
 
 def fetch_release_notes(
@@ -265,91 +258,76 @@ def summarize_digest(
     return summaries
 
 
-def ensure_release_notes_table(spark: Any, table_name: str) -> None:
-    """Create the capture table and add columns needed by newer job versions."""
-    LOGGER.info("Ensuring digest table exists: %s", table_name)
-    spark.sql(
-        f"""CREATE TABLE IF NOT EXISTS {table_name} (
-            note_id STRING,
-            title STRING,
-            note_url STRING,
-            category STRING,
-            published_utc DOUBLE,
-            summary STRING,
-            first_seen_at TIMESTAMP,
-            last_seen_at TIMESTAMP,
-            processed_at TIMESTAMP
-        ) USING DELTA"""
-    )
+@contextmanager
+def release_notes_db(database_path: Path) -> Iterator[sqlite3.Connection]:
+    """Open the SQLite digest state database, creating its schema when needed."""
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(database_path)
+    try:
+        with connection:
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS release_notes (
+                    note_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    note_url TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    published_utc REAL NOT NULL,
+                    summary TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TEXT
+                )"""
+            )
+            yield connection
+    finally:
+        connection.close()
 
 
-def capture_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]) -> None:
-    """Upsert feed items and retain their first and most recent observation times."""
-    ensure_release_notes_table(spark, table_name)
+def capture_release_notes(database_path: Path, notes: list[ReleaseNote]) -> None:
+    """Upsert fetched feed items while preserving their delivery state."""
     if not notes:
-        LOGGER.info("No release notes discovered for %s.", table_name)
+        LOGGER.info("No release notes discovered.")
         return
     rows = [(note.note_id, note.title, note.url, note.category, note.published_utc, note.summary) for note in notes]
-    discovered_notes = spark.createDataFrame(
-        rows, ["note_id", "title", "note_url", "category", "published_utc", "summary"]
-    )
-    discovered_notes.createOrReplaceTempView("discovered_release_notes")
-    spark.sql(
-        f"""MERGE INTO {table_name} AS target
-        USING discovered_release_notes AS source
-        ON target.note_id = source.note_id
-        WHEN MATCHED THEN UPDATE SET
-            title = source.title,
-            note_url = source.note_url,
-            category = source.category,
-            published_utc = source.published_utc,
-            summary = source.summary,
-            last_seen_at = current_timestamp()
-        WHEN NOT MATCHED THEN INSERT
-            (note_id, title, note_url, category, published_utc, summary,
-             first_seen_at, last_seen_at, processed_at)
-        VALUES
-            (source.note_id, source.title, source.note_url, source.category,
-             source.published_utc, source.summary, current_timestamp(),
-             current_timestamp(), NULL)"""
-    )
-    LOGGER.info("Captured %d release notes in %s.", len(rows), table_name)
-
-
-def load_pending_release_notes(spark: Any, table_name: str) -> list[ReleaseNote]:
-    """Load captured release notes that have not been delivered yet."""
-    ensure_release_notes_table(spark, table_name)
-    rows = spark.sql(
-        f"""SELECT note_id, title, note_url, category, published_utc, summary
-        FROM {table_name}
-        WHERE processed_at IS NULL
-        ORDER BY published_utc DESC"""
-    ).collect()
-    return [
-        ReleaseNote(
-            note_id=row.note_id,
-            title=row.title,
-            url=row.note_url,
-            category=row.category,
-            published_utc=float(row.published_utc),
-            summary=row.summary or "",
+    with release_notes_db(database_path) as connection:
+        connection.executemany(
+            """INSERT INTO release_notes
+                (note_id, title, note_url, category, published_utc, summary)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(note_id) DO UPDATE SET
+                    title = excluded.title,
+                    note_url = excluded.note_url,
+                    category = excluded.category,
+                    published_utc = excluded.published_utc,
+                    summary = excluded.summary,
+                    last_seen_at = CURRENT_TIMESTAMP""",
+            rows,
         )
-        for row in rows
-    ]
+    LOGGER.info("Captured %d release notes in %s.", len(rows), database_path)
 
 
-def load_new_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]) -> list[ReleaseNote]:
-    """Return supplied notes whose stable IDs have not been delivered yet."""
-    ensure_release_notes_table(spark, table_name)
-    known_ids = {row.note_id for row in spark.sql(f"SELECT note_id FROM {table_name}").collect()}
-    new_notes = [note for note in notes if note.note_id not in known_ids]
-    LOGGER.info(
-        "Compared %d fetched notes with %d delivered note IDs; %d are pending.",
-        len(notes),
-        len(known_ids),
-        len(new_notes),
-    )
-    return new_notes
+def load_pending_release_notes(database_path: Path) -> list[ReleaseNote]:
+    """Load captured release notes that have not been delivered yet."""
+    with release_notes_db(database_path) as connection:
+        rows = connection.execute(
+            """SELECT note_id, title, note_url, category, published_utc, summary
+            FROM release_notes
+            WHERE processed_at IS NULL
+            ORDER BY published_utc DESC"""
+        ).fetchall()
+    return [ReleaseNote(row[0], row[1], row[2], row[3], float(row[4]), row[5] or "") for row in rows]
+
+
+def save_release_notes(database_path: Path, notes: list[ReleaseNote]) -> None:
+    """Mark successfully delivered release notes as processed."""
+    if not notes:
+        return
+    with release_notes_db(database_path) as connection:
+        connection.executemany(
+            "UPDATE release_notes SET processed_at = CURRENT_TIMESTAMP WHERE note_id = ?",
+            [(note.note_id,) for note in notes],
+        )
+    LOGGER.info("Marked %d release notes delivered in %s.", len(notes), database_path)
 
 
 def send_digest(notes: list[ReleaseNote], scope: str, pub_date: date) -> None:
@@ -466,47 +444,29 @@ def send_digest(notes: list[ReleaseNote], scope: str, pub_date: date) -> None:
     LOGGER.info("Digest email delivered successfully.")
 
 
-def save_release_notes(spark: Any, table_name: str, notes: list[ReleaseNote]) -> None:
-    """Mark captured release notes as delivered in the Databricks Delta table."""
-    rows = [(note.note_id,) for note in notes]
-    if not rows:
-        LOGGER.info("No release notes to mark delivered in %s.", table_name)
-        return
-    LOGGER.info("Marking %d delivered release notes in %s.", len(rows), table_name)
-    delivered_notes = spark.createDataFrame(rows, ["note_id"])
-    delivered_notes.createOrReplaceTempView("delivered_release_notes")
-    spark.sql(
-        f"""MERGE INTO {table_name} AS target
-        USING delivered_release_notes AS source
-        ON target.note_id = source.note_id
-        WHEN MATCHED THEN UPDATE SET processed_at = current_timestamp()"""
-    )
-    LOGGER.info("Marked %d release notes delivered in %s.", len(rows), table_name)
-
-
 def main() -> None:
-    """Fetch release notes, email the digest, and record delivered items."""
+    """Fetch release notes, email the digest, and persist delivery state."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--digest-table", required=True)
-    parser.add_argument("--secret-scope", required=True)
+    parser.add_argument(
+        "--state-db",
+        type=Path,
+        default=Path(os.getenv("DIGEST_STATE_DB", "data/release_notes.sqlite3")),
+        help="Path to the SQLite file used to persist sent release notes.",
+    )
     args = parser.parse_args()
-    LOGGER.info("Starting Databricks digest job for table %s.", args.digest_table)
-
-    from pyspark.sql import SparkSession
-
-    spark = SparkSession.builder.getOrCreate()
+    LOGGER.info("Starting digest job with state database %s.", args.state_db)
     discovered_notes = fetch_release_notes()
-    capture_release_notes(spark, args.digest_table, discovered_notes)
-    pending_notes = load_pending_release_notes(spark, args.digest_table)
+    capture_release_notes(args.state_db, discovered_notes)
+    pending_notes = load_pending_release_notes(args.state_db)
     if not pending_notes:
         LOGGER.info("No new release notes found; skipping email delivery.")
         print("No new Azure Databricks release notes found; no email sent.")
         return
     digest_date = datetime.now(LOCAL_TIMEZONE).date()
-    send_digest(pending_notes, args.secret_scope, pub_date=digest_date)
-    save_release_notes(spark, args.digest_table, pending_notes)
-    LOGGER.info("Databricks digest job completed successfully with %d release notes.", len(pending_notes))
+    send_digest(pending_notes, "github", pub_date=digest_date)
+    save_release_notes(args.state_db, pending_notes)
+    LOGGER.info("Digest job completed successfully with %d release notes.", len(pending_notes))
     print(f"Sent digest containing {len(pending_notes)} release notes.")
 
 

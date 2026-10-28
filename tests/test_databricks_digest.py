@@ -1,5 +1,4 @@
 import sys
-import types
 from datetime import UTC, date, datetime
 from importlib.util import module_from_spec, spec_from_file_location
 from io import BytesIO
@@ -329,85 +328,44 @@ def test_get_secret_reads_environment(monkeypatch):
     assert databricks_digest.get_secret("scope", "recipient-email") == "user@example.com"
 
 
-def test_get_secret_reads_dbutils(monkeypatch):
-    """Verify secrets fall back to Databricks dbutils."""
-    monkeypatch.delenv("SOME_KEY", raising=False)
-    dbutils = MagicMock()
-    dbutils.secrets.get.return_value = "secret-value"
-    monkeypatch.setattr(databricks_digest, "dbutils", dbutils, raising=False)
-    assert databricks_digest.get_secret("scope", "some-key") == "secret-value"
-    dbutils.secrets.get.assert_called_once_with(scope="scope", key="some-key")
-
-
-def test_get_secret_requires_runtime_or_environment(monkeypatch):
-    """Verify missing local and Databricks secret providers raise an error."""
+def test_get_secret_requires_environment(monkeypatch):
+    """Verify missing environment secrets raise a helpful error."""
     monkeypatch.delenv("MISSING_KEY", raising=False)
-    monkeypatch.delattr(databricks_digest, "dbutils", raising=False)
-    with patch.dict(sys.modules, {"databricks": None, "databricks.sdk": None, "databricks.sdk.runtime": None}):
-        with pytest.raises(RuntimeError, match="MISSING_KEY"):
-            databricks_digest.get_secret("scope", "missing-key")
+    with pytest.raises(RuntimeError, match="MISSING_KEY"):
+        databricks_digest.get_secret("scope", "missing-key")
 
 
-def test_load_new_release_notes_excludes_processed_ids():
-    """Verify stored note IDs are excluded from new results."""
-    spark = MagicMock()
-    spark.sql.return_value.collect.return_value = [MagicMock(note_id="known")]
-    notes = databricks_digest.load_new_release_notes(
-        spark, "catalog.schema.notes", [make_note("known"), make_note("new")]
-    )
-    assert [note.note_id for note in notes] == ["new"]
-    spark.sql.assert_any_call("SELECT note_id FROM catalog.schema.notes")
+def test_capture_and_load_release_notes_persists_pending_state(tmp_path):
+    """Verify SQLite persistence and idempotent upserts by stable note ID."""
+    database_path = tmp_path / "state" / "release_notes.sqlite3"
+    note = make_note("future")
+
+    databricks_digest.capture_release_notes(database_path, [note])
+    databricks_digest.capture_release_notes(database_path, [note])
+
+    assert databricks_digest.load_pending_release_notes(database_path) == [note]
+    with databricks_digest.release_notes_db(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM release_notes").fetchone()[0] == 1
 
 
-def test_capture_release_notes_merges_by_stable_feed_id():
-    """Verify discovery persists feed metadata with an idempotent merge key."""
-    spark = MagicMock()
-    databricks_digest.capture_release_notes(spark, "catalog.schema.notes", [make_note("future")])
+def test_save_release_notes_marks_notes_delivered(tmp_path):
+    """Verify successfully delivered note IDs are no longer pending."""
+    database_path = tmp_path / "release_notes.sqlite3"
+    note = make_note()
+    databricks_digest.capture_release_notes(database_path, [note])
 
-    spark.createDataFrame.assert_called_once_with(
-        [
-            (
-                "future",
-                "Databricks announcement",
-                "https://learn.microsoft.com/en-us/azure/databricks/release-notes/future",
-                "Azure Databricks",
-                1_700_000_000,
-                "A release note summary.",
-            )
-        ],
-        ["note_id", "title", "note_url", "category", "published_utc", "summary"],
-    )
-    assert "WHEN MATCHED THEN UPDATE SET" in spark.sql.call_args.args[0]
-    assert "WHEN NOT MATCHED THEN INSERT" in spark.sql.call_args.args[0]
+    databricks_digest.save_release_notes(database_path, [note])
+
+    assert databricks_digest.load_pending_release_notes(database_path) == []
 
 
-def test_load_pending_release_notes_maps_unprocessed_rows():
-    """Verify pending captured rows are converted back to release notes."""
-    spark = MagicMock()
-    spark.sql.return_value.collect.return_value = [
-        MagicMock(
-            note_id="future",
-            title="Future",
-            note_url="https://learn.microsoft.com/en-us/azure/databricks/release-notes/future",
-            category="Platform",
-            published_utc=1_700_000_000,
-            summary="Summary",
-        )
-    ]
+def test_save_release_notes_skips_empty_list(tmp_path):
+    """Verify an empty delivery does not create a state database."""
+    database_path = tmp_path / "release_notes.sqlite3"
 
-    notes = databricks_digest.load_pending_release_notes(spark, "catalog.schema.notes")
+    databricks_digest.save_release_notes(database_path, [])
 
-    assert notes == [
-        databricks_digest.ReleaseNote(
-            note_id="future",
-            title="Future",
-            url="https://learn.microsoft.com/en-us/azure/databricks/release-notes/future",
-            category="Platform",
-            published_utc=1_700_000_000,
-            summary="Summary",
-        )
-    ]
-    assert "WHERE processed_at IS NULL" in spark.sql.call_args.args[0]
+    assert not database_path.exists()
 
 
 def test_send_digest_uses_gmail_secrets_and_escapes_html():
@@ -459,22 +417,6 @@ def test_send_digest_sends_items_when_llm_summary_fails():
     plain_content = message.get_body(preferencelist=("plain",)).get_content()
     assert "Databricks announcement" in plain_content
     assert "LLM summary:" not in plain_content
-
-
-def test_save_release_notes_skips_empty_input():
-    """Verify saving an empty list performs no DataFrame write."""
-    spark = MagicMock()
-    databricks_digest.save_release_notes(spark, "catalog.schema.notes", [])
-    spark.createDataFrame.assert_not_called()
-
-
-def test_save_release_notes_merges_rows():
-    """Verify release notes are converted to a temporary Spark view."""
-    spark = MagicMock()
-    databricks_digest.save_release_notes(spark, "catalog.schema.notes", [make_note()])
-    spark.createDataFrame.assert_called_once()
-    spark.createDataFrame.return_value.createOrReplaceTempView.assert_called_once_with("delivered_release_notes")
-    assert "WHEN MATCHED THEN UPDATE SET processed_at" in spark.sql.call_args.args[0]
 
 
 def test_local_digest_main_dry_run(capsys):
@@ -538,29 +480,22 @@ def test_local_digest_main_skips_empty_email(capsys):
     assert "no email sent" in capsys.readouterr().out
 
 
-def test_databricks_main_handles_empty_run(monkeypatch):
-    """Verify the Databricks entry point skips email when no notes are new."""
-    spark = MagicMock()
-    spark_module = types.ModuleType("pyspark.sql")
-    spark_module.SparkSession = MagicMock(builder=MagicMock(getOrCreate=MagicMock(return_value=spark)))
-    monkeypatch.setitem(sys.modules, "pyspark.sql", spark_module)
+def test_ingest_main_handles_empty_run(monkeypatch, tmp_path, capsys):
+    """Verify the runner entry point skips delivery when no notes are found."""
     monkeypatch.setattr(databricks_digest, "fetch_release_notes", lambda **_: [])
-    monkeypatch.setattr(databricks_digest, "load_new_release_notes", lambda *_: [])
-    monkeypatch.setattr(sys, "argv", ["databricks_digest.py", "--digest-table", "table", "--secret-scope", "scope"])
+    monkeypatch.setattr(sys, "argv", ["databricks_digest.py", "--state-db", str(tmp_path / "state.sqlite3")])
     databricks_digest.main()
+    assert "no email sent" in capsys.readouterr().out
 
 
-def test_databricks_main_sends_and_saves(monkeypatch):
-    """Verify the Databricks entry point delivers and persists new notes."""
-    spark = MagicMock()
-    spark_module = types.ModuleType("pyspark.sql")
-    spark_module.SparkSession = MagicMock(builder=MagicMock(getOrCreate=MagicMock(return_value=spark)))
-    monkeypatch.setitem(sys.modules, "pyspark.sql", spark_module)
+def test_ingest_main_sends_and_saves(monkeypatch, tmp_path):
+    """Verify successful delivery marks notes processed in the state database."""
     notes = [make_note()]
     monkeypatch.setattr(databricks_digest, "fetch_release_notes", lambda **_: notes)
-    monkeypatch.setattr(databricks_digest, "capture_release_notes", MagicMock())
-    monkeypatch.setattr(databricks_digest, "load_pending_release_notes", lambda *_: notes)
     monkeypatch.setattr(databricks_digest, "send_digest", MagicMock())
-    monkeypatch.setattr(databricks_digest, "save_release_notes", MagicMock())
-    monkeypatch.setattr(sys, "argv", ["databricks_digest.py", "--digest-table", "table", "--secret-scope", "scope"])
+    database_path = tmp_path / "state.sqlite3"
+    monkeypatch.setattr(sys, "argv", ["databricks_digest.py", "--state-db", str(database_path)])
+
     databricks_digest.main()
+    databricks_digest.send_digest.assert_called_once()
+    assert databricks_digest.load_pending_release_notes(database_path) == []

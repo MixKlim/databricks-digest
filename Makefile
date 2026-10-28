@@ -5,7 +5,6 @@ help:
 	@echo "  eval              - Run pre-commit checks on all files"
 	@echo "  test              - Run unit tests with pytest"
 	@echo "  cov               - Generate coverage report and badge"
-	@echo "  validate          - Validate the Databricks bundle"
 	@echo "  build             - Evaluate code, run tests, and generate coverage"
 
 cache:
@@ -36,8 +35,4 @@ cov:
 	uv run coverage html
 	uv run genbadge coverage --output-file reports/coverage/coverage-badge.svg
 
-validate:
-	@echo "Validating bundle"
-	databricks bundle validate
-
-build: audit sync eval test cov validate
+build: audit sync eval test cov
