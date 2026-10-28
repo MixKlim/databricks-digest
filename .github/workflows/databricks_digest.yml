@@ -1,15 +1,15 @@
-name: Databricks bundle CI/CD
+name: Digest CI and daily delivery
 
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
-    paths:
-      - 'src/**/*.py'
-      - '**/*.yml'
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
-concurrency: databricks-bundle
+concurrency:
+  group: release-notes-digest
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -64,41 +64,40 @@ jobs:
           path: code-coverage-results.md
       - name: Write to Job Summary
         run: cat code-coverage-results.md >> $GITHUB_STEP_SUMMARY
-      - uses: databricks/setup-cli@main
-      - name: Validate bundle
-        env:
-          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-        run: databricks bundle validate >/dev/null && echo "Validation OK!"
 
-  deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  digest:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
-      - uses: databricks/setup-cli@main
-      - name: Deploy bundle
+      - name: Restore SQLite digest state
+        uses: actions/cache/restore@v4
+        with:
+          path: data/release_notes.sqlite3
+          key: release-notes-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: release-notes-state-
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: uv sync --locked --all-groups --all-extras
+      - name: Fetch and email release notes
+        run: uv run python src/databricks_digest.py
         env:
-          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          BUNDLE_VAR_principal_name: ${{ secrets.DATABRICKS_PRINCIPAL_NAME }}
-          DATABRICKS_BUNDLE_TARGET: prod
-        run: databricks bundle deploy --force
-
-  run:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: deploy
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@v6
-      - uses: databricks/setup-cli@main
-      - name: Run bundle
-        env:
-          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          BUNDLE_VAR_principal_name: ${{ secrets.DATABRICKS_PRINCIPAL_NAME }}
-          DATABRICKS_BUNDLE_TARGET: prod
-        run: databricks bundle run databricks_digest --refresh-all --no-wait
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - name: Save SQLite digest state
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: data/release_notes.sqlite3
+          key: release-notes-state-${{ github.run_id }}-${{ github.run_attempt }}

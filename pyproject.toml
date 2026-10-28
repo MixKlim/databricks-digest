@@ -17,6 +17,9 @@ package = false
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+filterwarnings = [
+    "ignore:'_UnionGenericAlias' is deprecated and slated for removal:DeprecationWarning:google\\.genai\\.types",
+]
 
 [tool.isort]
 profile = "black"

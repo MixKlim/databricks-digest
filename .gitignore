@@ -1,4 +1,6 @@
 .databricks/
+data/release_notes.sqlite3
+data/release_notes.sqlite3-journal
 __pycache__/
 *.pyc
 .venv/
