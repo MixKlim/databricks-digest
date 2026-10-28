@@ -68,7 +68,6 @@ jobs:
 
   digest:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    needs: build
     runs-on: ubuntu-latest
     environment: production
     permissions:
