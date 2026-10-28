@@ -1,6 +1,6 @@
 # Azure Databricks Release Notes Digest
 
-[![CI/CD](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks.yml/badge.svg)](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks.yml)
+[![CI/CD](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks_digest.yml/badge.svg)](https://github.com/MixKlim/databricks-digest/actions/workflows/databricks_digest.yml)
 [![Coverage Status](https://raw.githubusercontent.com/mixklim/databricks-digest/main/reports/coverage/coverage-badge.svg?dummy=8484744)](https://raw.githubusercontent.com/mixklim/databricks-digest/main/reports/coverage/index.html)
 
 <img src="./media/sample_email.png" alt="Sample email digest" width="90%">
